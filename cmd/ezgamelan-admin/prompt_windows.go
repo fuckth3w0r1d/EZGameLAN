@@ -5,6 +5,7 @@ package main
 import (
 	"fmt"
 	"runtime"
+	"strings"
 	"sync"
 	"unsafe"
 
@@ -182,7 +183,9 @@ func promptWindowProc(window uintptr, message uint32, wParam, lParam uintptr) ui
 	case wmCommand:
 		switch uint16(wParam & 0xffff) {
 		case idPromptConnect:
-			target := promptControlText(currentPrompt.edit, 128)
+			target := strings.TrimSpace(
+				promptControlText(currentPrompt.edit, 128),
+			)
 			if err := adminweb.ValidateServerAlias(target); err != nil {
 				promptSetControlText(currentPrompt.status, err.Error())
 				return 0
@@ -300,8 +303,8 @@ func promptControlText(control uintptr, limit int) string {
 	buffer := make([]uint16, int(length)+1)
 	promptGetText.Call(
 		control,
-		uintptr(len(buffer)),
 		uintptr(unsafe.Pointer(&buffer[0])),
+		uintptr(len(buffer)),
 	)
 	return windows.UTF16ToString(buffer)
 }
