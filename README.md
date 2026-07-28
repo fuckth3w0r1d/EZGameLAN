@@ -23,8 +23,8 @@ sudo ./ezlanctl status
 
 Windows 端使用自己的简易客户端和后台 Service，不依赖 OpenVPN GUI：
 
-- `ezgamelan-client.exe` 是普通用户托盘界面，只显示 URL、Token、连接、断开和
-  状态；
+- `ezgamelan-client.exe` 是普通用户托盘界面，使用一个输入框接收完整加入链接
+  或 URL + Token，并提供连接、断开、自动状态刷新和日志导出；
 - `ezgamelan-service.exe` 是唯一的自有特权进程；
 - 客户端与 Service 使用受限、版本化、定长上限的本机 Named Pipe；
 - Service 通过系统证书库访问 HTTPS，在请求体中提交一次性 Token；
@@ -32,7 +32,10 @@ Windows 端使用自己的简易客户端和后台 Service，不依赖 OpenVPN G
 - 活动配置保存在 `%ProgramData%\EZGameLAN\config`，仅 Administrators 和
   `SYSTEM` 可读；
 - Service 直接启动一个 `openvpn.exe`，检查虚拟 IP，并对异常退出做有上限的
-  重试。
+  重试；
+- 连接成功后 TAP 友好名称显示为 `EZGameLAN`；
+- Service 日志单文件 256 KiB，只保留当前文件和两份备份；UI 日志单文件
+  128 KiB，只保留一份备份；导出时截取最近内容并再次脱敏。
 
 Windows x64 开发构建：
 
@@ -48,12 +51,14 @@ go build -trimpath -ldflags "-H=windowsgui" `
 ```
 
 TAP-Windows6 驱动需要在安装阶段一次性安装。Service 启动后，玩家只运行
-`ezgamelan-client.exe`，输入管理员给出的 HTTPS URL 和 Token，然后点击
-“加入并连接”。
+`ezgamelan-client.exe`，将管理员给出的完整 `ezgamelan://` 加入链接粘贴到
+唯一输入框，然后点击“加入并连接”。分开收到 URL 和 Token 时，也可将二者用
+空格或换行分隔后一起粘贴。
 
-当前 Windows 代码已经完成 URL + Token 领取、严格配置生成、Named Pipe、
-Service 生命周期和原生 Win32 界面。发布安装包前还需在 Windows 10/11 真机上
-完成 TAP 安装、Service 安装/卸载、签名和游戏联机验证。
+当前 Windows 代码已经完成加入领取、严格配置生成、Named Pipe、Service
+生命周期和原生 Win32 界面，并已在 Windows x64 实机验证安装、TAP 地址分配与
+服务器连接。后续仍需用两台 Windows 电脑完成互通、游戏联机、重连和完整卸载
+验证。
 
 最终分发物是单个 `EZGameLAN-Setup.exe`。玩家只需双击这个文件并确认一次
 UAC，不接触 PowerShell 脚本、MSI 或内部文件。

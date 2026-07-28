@@ -9,7 +9,7 @@ $ErrorActionPreference = "Stop"
 $OutputEncoding = [Console]::OutputEncoding
 
 $serviceName = "EZGameLAN"
-$productVersion = "0.1.1"
+$productVersion = "0.1.2"
 $installDir = Join-Path $env:ProgramFiles "EZGameLAN"
 $dataDir = Join-Path $env:ProgramData "EZGameLAN"
 $installerDir = Join-Path $dataDir "installer"

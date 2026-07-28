@@ -67,7 +67,7 @@ ezgamelan://join?url=https%3A%2F%2FHOST%2Fezgamelan%2Fv1%2Fenroll#TOKEN
 ```text
 第一次安装 EZGameLAN
 → 打开客户端
-→ 粘贴 HTTPS URL 和 Token（或直接点击完整加入链接）
+→ 在一个输入框粘贴完整加入链接（也兼容 URL + Token）
 → 点击“加入并连接”
 → 显示“已连接”和自己的虚拟 IP
 → 启动游戏
@@ -169,21 +169,32 @@ DNS、脚本、插件和外部文件引用。
 - 启动、停止并等待一个受控的 `openvpn.exe`；
 - OpenVPN 异常退出时进行有上限的重启；
 - 检查 TAP 虚拟 IP，返回连接状态；
-- 保存有界、脱敏日志。
+- 将已连接的 TAP 友好名称设为 `EZGameLAN`；
+- 保存有界、脱敏日志并通过 IPC 提供受限诊断快照。
 
 `ezgamelan-client.exe` 以普通用户运行，只提供：
 
-- HTTPS URL、Token 两个输入框和“加入并连接”按钮；
-- 连接、断开和状态显示；
+- 一个加入信息输入框，接受完整 `ezgamelan://` 链接或用空白分隔的 URL 与
+  Token；
+- 加入、连接、断开和导出日志按钮；
+- 每 2 秒读取一次连接状态，显示虚拟 IP 和虚拟网卡名称；
 - 关闭主窗口后保留托盘图标，托盘菜单只有打开和退出；
 - 清晰的中文错误和下一步。
 
 离线 `.ezlan` 导入复用同一个 Service 校验与安装路径，在 URL + Token 主流程
 完成真机验证后再接入文件选择按钮。
 
-客户端和 Service 使用固定版本的本机 Named Pipe JSON 协议。消息有长度上限，
-Pipe ACL 只允许本机已登录用户、Administrators 和 `SYSTEM`；每次请求由
-Service 再次校验字段。首版不做多用户会话、多配置或远程控制。
+客户端和 Service 使用固定版本的本机 Named Pipe JSON 协议。普通请求上限为
+16 KiB，诊断响应上限为 128 KiB；Pipe ACL 只允许本机已登录用户、
+Administrators 和 `SYSTEM`；每次请求由 Service 再次校验字段。首版不做
+多用户会话、多配置或远程控制。
+
+Service 日志位于 `%ProgramData%\EZGameLAN\logs`，单文件最多 256 KiB，只
+保留当前文件和两份滚动备份，总上限约 768 KiB。日志记录状态变化、稳定错误码
+和 OpenVPN 最近输出，不记录 Token、完整加入链接或配置内容。“导出日志”
+由 Service 先截取最近 128 KiB 并再次脱敏，再交给普通用户客户端选择保存位置。
+普通 UI 日志位于 `%LocalAppData%\EZGameLAN\logs`，单文件最多 128 KiB，
+只保留一份备份；导出时附带其中最近 32 KiB。两类日志总保留量约 1 MiB。
 
 ### 6.2 活动配置
 
@@ -194,6 +205,11 @@ Service 再次校验字段。首版不做多用户会话、多配置或远程控
 - 配置保存在 `%ProgramData%\EZGameLAN\config`；
 - 卸载时删除本机配置和私钥；
 - 本机卸载不会吊销服务器证书，设备退出时仍要由管理员执行 `revoke`。
+
+Service 只在同时确认 `10.86.0.10`～`10.86.0.19` 虚拟地址和 TAP 名称或
+硬件地址特征后重命名对应网卡，不会按模糊名称操作其他网卡。首次重命名前在
+受保护配置目录记录原名称；升级保留该记录，卸载时恢复原名称，然后再按安装
+来源决定是否卸载 OpenVPN。
 
 ### 6.3 Windows 防火墙
 

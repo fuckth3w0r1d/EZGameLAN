@@ -14,17 +14,20 @@ import (
 )
 
 const (
-	Version        = 1
-	MaxMessageSize = 16 << 10
+	Version         = 2
+	MaxRequestSize  = 16 << 10
+	MaxResponseSize = 256 << 10
+	MaxDiagnostics  = 128 << 10
 )
 
 type Action string
 
 const (
-	ActionJoin       Action = "join"
-	ActionConnect    Action = "connect"
-	ActionDisconnect Action = "disconnect"
-	ActionStatus     Action = "status"
+	ActionJoin        Action = "join"
+	ActionConnect     Action = "connect"
+	ActionDisconnect  Action = "disconnect"
+	ActionStatus      Action = "status"
+	ActionDiagnostics Action = "diagnostics"
 )
 
 type ConnectionState string
@@ -46,28 +49,30 @@ type Request struct {
 }
 
 type Status struct {
-	State     ConnectionState `json:"state"`
-	VirtualIP string          `json:"virtual_ip,omitempty"`
-	ErrorCode string          `json:"error_code,omitempty"`
+	State       ConnectionState `json:"state"`
+	VirtualIP   string          `json:"virtual_ip,omitempty"`
+	AdapterName string          `json:"adapter_name,omitempty"`
+	ErrorCode   string          `json:"error_code,omitempty"`
 }
 
 type Response struct {
-	Version int    `json:"version"`
-	OK      bool   `json:"ok"`
-	Code    string `json:"code,omitempty"`
-	Message string `json:"message,omitempty"`
-	Status  Status `json:"status"`
+	Version     int    `json:"version"`
+	OK          bool   `json:"ok"`
+	Code        string `json:"code,omitempty"`
+	Message     string `json:"message,omitempty"`
+	Status      Status `json:"status"`
+	Diagnostics string `json:"diagnostics,omitempty"`
 }
 
 func WriteRequest(w io.Writer, request Request) error {
 	if err := request.Validate(); err != nil {
 		return err
 	}
-	return writeJSONFrame(w, request)
+	return writeJSONFrame(w, request, MaxRequestSize)
 }
 
 func ReadRequest(r io.Reader) (Request, error) {
-	data, err := readFrame(r)
+	data, err := readFrame(r, MaxRequestSize)
 	if err != nil {
 		return Request{}, err
 	}
@@ -85,11 +90,11 @@ func WriteResponse(w io.Writer, response Response) error {
 	if err := response.Validate(); err != nil {
 		return err
 	}
-	return writeJSONFrame(w, response)
+	return writeJSONFrame(w, response, MaxResponseSize)
 }
 
 func ReadResponse(r io.Reader) (Response, error) {
-	data, err := readFrame(r)
+	data, err := readFrame(r, MaxResponseSize)
 	if err != nil {
 		return Response{}, err
 	}
@@ -117,7 +122,7 @@ func (r Request) Validate() error {
 		if _, err := join.NewInvitation(r.URL, r.Token); err != nil {
 			return fmt.Errorf("E_SERVICE_REQUEST: 加入参数错误: %w", err)
 		}
-	case ActionConnect, ActionDisconnect, ActionStatus:
+	case ActionConnect, ActionDisconnect, ActionStatus, ActionDiagnostics:
 		if r.URL != "" || r.Token != "" {
 			return errors.New("E_SERVICE_REQUEST: 当前操作包含多余参数")
 		}
@@ -145,18 +150,22 @@ func (r Response) Validate() error {
 		return errors.New("E_SERVICE_PROTOCOL: 错误响应缺少错误码或提示")
 	}
 	if len(r.Message) > 1024 || len(r.Status.VirtualIP) > 64 ||
-		len(r.Status.ErrorCode) > 64 || len(r.Code) > 64 {
+		len(r.Status.AdapterName) > 128 || len(r.Status.ErrorCode) > 64 ||
+		len(r.Code) > 64 || len(r.Diagnostics) > MaxDiagnostics {
 		return errors.New("E_SERVICE_PROTOCOL: 响应字段过长")
+	}
+	if !r.OK && r.Diagnostics != "" {
+		return errors.New("E_SERVICE_PROTOCOL: 错误响应包含诊断内容")
 	}
 	return nil
 }
 
-func writeJSONFrame(w io.Writer, value any) error {
+func writeJSONFrame(w io.Writer, value any, limit int) error {
 	data, err := json.Marshal(value)
 	if err != nil {
 		return fmt.Errorf("encode IPC message: %w", err)
 	}
-	if len(data) == 0 || len(data) > MaxMessageSize {
+	if len(data) == 0 || len(data) > limit {
 		return errors.New("IPC message exceeds size limit")
 	}
 	var header [4]byte
@@ -170,13 +179,13 @@ func writeJSONFrame(w io.Writer, value any) error {
 	return nil
 }
 
-func readFrame(r io.Reader) ([]byte, error) {
+func readFrame(r io.Reader, limit int) ([]byte, error) {
 	var header [4]byte
 	if _, err := io.ReadFull(r, header[:]); err != nil {
 		return nil, fmt.Errorf("read IPC header: %w", err)
 	}
 	size := binary.LittleEndian.Uint32(header[:])
-	if size == 0 || size > MaxMessageSize {
+	if size == 0 || size > uint32(limit) {
 		return nil, errors.New("IPC message size is invalid")
 	}
 	data := make([]byte, int(size))

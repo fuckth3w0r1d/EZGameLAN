@@ -40,7 +40,7 @@ func TestReadRequestRejectsDuplicateAndOversize(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := []byte(`{"version":1,"version":1,"action":"join","url":"https://vpn.example.test/ezgamelan/v1/enroll","token":"` + token + `"}`)
+	body := []byte(`{"version":2,"version":2,"action":"join","url":"https://vpn.example.test/ezgamelan/v1/enroll","token":"` + token + `"}`)
 	var frame bytes.Buffer
 	var header [4]byte
 	binary.LittleEndian.PutUint32(header[:], uint32(len(body)))
@@ -53,7 +53,7 @@ func TestReadRequestRejectsDuplicateAndOversize(t *testing.T) {
 	}
 
 	frame.Reset()
-	binary.LittleEndian.PutUint32(header[:], MaxMessageSize+1)
+	binary.LittleEndian.PutUint32(header[:], MaxRequestSize+1)
 	frame.Write(header[:])
 	if _, err := ReadRequest(&frame); err == nil {
 		t.Fatal("ReadRequest accepted an oversized frame")
@@ -62,7 +62,12 @@ func TestReadRequestRejectsDuplicateAndOversize(t *testing.T) {
 
 func TestRequestRejectsExtraJoinFields(t *testing.T) {
 	t.Parallel()
-	for _, action := range []Action{ActionConnect, ActionDisconnect, ActionStatus} {
+	for _, action := range []Action{
+		ActionConnect,
+		ActionDisconnect,
+		ActionStatus,
+		ActionDiagnostics,
+	} {
 		request := Request{
 			Version: Version,
 			Action:  action,
@@ -71,6 +76,55 @@ func TestRequestRejectsExtraJoinFields(t *testing.T) {
 		if err := request.Validate(); err == nil {
 			t.Errorf("%s accepted URL", action)
 		}
+	}
+}
+
+func TestDiagnosticsResponseRoundTrip(t *testing.T) {
+	t.Parallel()
+	want := Response{
+		Version: Version,
+		OK:      true,
+		Status: Status{
+			State:       StateConnected,
+			VirtualIP:   "10.86.0.11",
+			AdapterName: "EZGameLAN",
+		},
+		Diagnostics: strings.Repeat("diagnostic line\n", 4000),
+	}
+	var encoded shortWriter
+	if err := WriteResponse(&encoded, want); err != nil {
+		t.Fatalf("WriteResponse: %v", err)
+	}
+	got, err := ReadResponse(bytes.NewReader(encoded.Bytes()))
+	if err != nil {
+		t.Fatalf("ReadResponse: %v", err)
+	}
+	if got != want {
+		t.Fatalf("response mismatch: got %d diagnostic bytes", len(got.Diagnostics))
+	}
+}
+
+func TestDiagnosticsResponseRejectsOversizeOrErrorPayload(t *testing.T) {
+	t.Parallel()
+	response := Response{
+		Version:     Version,
+		OK:          true,
+		Status:      Status{State: StateDisconnected},
+		Diagnostics: strings.Repeat("x", MaxDiagnostics+1),
+	}
+	if err := response.Validate(); err == nil {
+		t.Fatal("Validate accepted oversized diagnostics")
+	}
+	response = Response{
+		Version:     Version,
+		OK:          false,
+		Code:        "E_INTERNAL_LOG",
+		Message:     "log failed",
+		Status:      Status{State: StateError},
+		Diagnostics: "unexpected",
+	}
+	if err := response.Validate(); err == nil {
+		t.Fatal("Validate accepted diagnostics in an error response")
 	}
 }
 

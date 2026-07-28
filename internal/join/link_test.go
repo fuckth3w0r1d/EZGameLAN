@@ -43,6 +43,39 @@ func TestNewInvitationAcceptsURLAndTokenFields(t *testing.T) {
 	}
 }
 
+func TestParseInputAcceptsLinkAndURLToken(t *testing.T) {
+	t.Parallel()
+	token, err := invite.NewToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	enrollURL := "https://vpn.example.test/ezgamelan/v1/enroll"
+	link := "ezgamelan://join?url=" + url.QueryEscape(enrollURL) + "#" + token
+	for _, raw := range []string{
+		link,
+		enrollURL + " " + token,
+		enrollURL + "\r\n" + token,
+	} {
+		got, err := ParseInput(raw)
+		if err != nil {
+			t.Fatalf("ParseInput(%q): %v", raw, err)
+		}
+		if got.URL != enrollURL || got.Token != token {
+			t.Fatalf("ParseInput(%q) = %#v", raw, got)
+		}
+	}
+}
+
+func TestParseInputRejectsIncompleteTextWithoutLeakingIt(t *testing.T) {
+	t.Parallel()
+	raw := "https://vpn.example.test/ezgamelan/v1/enroll"
+	if _, err := ParseInput(raw); err == nil {
+		t.Fatal("ParseInput accepted incomplete text")
+	} else if strings.Contains(err.Error(), raw) {
+		t.Fatal("error exposed invitation input")
+	}
+}
+
 func TestParseLinkRejectsUnexpectedInputWithoutLeakingToken(t *testing.T) {
 	t.Parallel()
 	token, err := invite.NewToken()

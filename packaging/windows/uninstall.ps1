@@ -9,9 +9,11 @@ $OutputEncoding = [Console]::OutputEncoding
 $serviceName = "EZGameLAN"
 $installDir = Join-Path $env:ProgramFiles "EZGameLAN"
 $dataDir = Join-Path $env:ProgramData "EZGameLAN"
+$localDataDir = Join-Path $env:LOCALAPPDATA "EZGameLAN"
 $installerDir = Join-Path $dataDir "installer"
 $managedMarker = Join-Path $installerDir "openvpn-installed-by-ezgamelan"
 $cachedOpenVPNMSI = Join-Path $installerDir "openvpn.msi"
+$adapterMarker = Join-Path $dataDir "config\adapter-original-name.txt"
 
 function Test-Administrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -77,6 +79,23 @@ if ($null -ne $service) {
 }
 Stop-EZGameLANClient
 
+if (Test-Path -LiteralPath $adapterMarker -PathType Leaf) {
+    $originalAdapterName = (
+        Get-Content -LiteralPath $adapterMarker -Raw
+    ).Trim()
+    if ($originalAdapterName -match "^[^\r\n]{1,128}$" `
+        -and $originalAdapterName -ne "EZGameLAN") {
+        $ezAdapter = Get-NetAdapter -IncludeHidden -Name "EZGameLAN" `
+            -ErrorAction SilentlyContinue
+        $nameConflict = Get-NetAdapter -IncludeHidden -Name $originalAdapterName `
+            -ErrorAction SilentlyContinue
+        if ($null -ne $ezAdapter -and $null -eq $nameConflict) {
+            Rename-NetAdapter -Name "EZGameLAN" `
+                -NewName $originalAdapterName -Confirm:$false
+        }
+    }
+}
+
 $protocolKey = "HKLM:\Software\Classes\ezgamelan"
 if (Test-Path -LiteralPath $protocolKey) {
     $commandKey = Join-Path $protocolKey "shell\open\command"
@@ -115,4 +134,7 @@ if (Test-Path -LiteralPath $dataDir) {
 }
 if (Test-Path -LiteralPath $installDir) {
     Remove-Item -LiteralPath $installDir -Recurse -Force
+}
+if (Test-Path -LiteralPath $localDataDir) {
+    Remove-Item -LiteralPath $localDataDir -Recurse -Force
 }

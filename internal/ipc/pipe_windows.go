@@ -14,7 +14,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-const PipeName = `\\.\pipe\EZGameLAN-v1`
+const PipeName = `\\.\pipe\EZGameLAN-v2`
 
 type Handler func(context.Context, Request) Response
 
@@ -183,8 +183,8 @@ func (s *PipeServer) accept() (windows.Handle, error) {
 		windows.PIPE_TYPE_BYTE|windows.PIPE_READMODE_BYTE|
 			windows.PIPE_WAIT|windows.PIPE_REJECT_REMOTE_CLIENTS,
 		4,
-		MaxMessageSize,
-		MaxMessageSize,
+		MaxResponseSize,
+		MaxRequestSize,
 		5000,
 		attributes,
 	)

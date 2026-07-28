@@ -57,19 +57,6 @@ func TestHandleStatus(t *testing.T) {
 	}
 }
 
-func TestBoundedLog(t *testing.T) {
-	t.Parallel()
-	log := &boundedLog{}
-	data := []byte(strings.Repeat("x", 80<<10))
-	n, err := log.Write(data)
-	if err != nil || n != len(data) {
-		t.Fatalf("Write = %d, %v", n, err)
-	}
-	if len(log.data) != 64<<10 {
-		t.Fatalf("log size = %d", len(log.data))
-	}
-}
-
 func TestRestartDelayIsBounded(t *testing.T) {
 	t.Parallel()
 	if got := restartDelay(0); got != time.Second {
@@ -77,6 +64,61 @@ func TestRestartDelayIsBounded(t *testing.T) {
 	}
 	if got := restartDelay(10); got != 15*time.Second {
 		t.Fatalf("bounded delay = %s", got)
+	}
+}
+
+func TestRenameVirtualAdapterRecordsOriginalName(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	marker := filepath.Join(root, "adapter-original-name.txt")
+	manager, err := New(Options{
+		OpenVPNPath:       filepath.Join(root, "openvpn"),
+		ConfigPath:        filepath.Join(root, "ezgamelan.ovpn"),
+		AdapterMarkerPath: marker,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const original = "OpenVPN TAP-Windows6"
+	if got := manager.renameVirtualAdapter(original, true); got != "EZGameLAN" {
+		t.Fatalf("adapter name = %q", got)
+	}
+	data, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != original+"\n" {
+		t.Fatalf("marker = %q", data)
+	}
+}
+
+func TestRenameVirtualAdapterSkipsUnconfirmedInterface(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	marker := filepath.Join(root, "adapter-original-name.txt")
+	manager, err := New(Options{
+		OpenVPNPath:       filepath.Join(root, "openvpn"),
+		ConfigPath:        filepath.Join(root, "ezgamelan.ovpn"),
+		AdapterMarkerPath: marker,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := manager.renameVirtualAdapter("Ethernet", false); got != "Ethernet" {
+		t.Fatalf("adapter name = %q", got)
+	}
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unexpected marker: %v", err)
+	}
+}
+
+func TestBestEffortWriterDoesNotPropagateLogFailure(t *testing.T) {
+	t.Parallel()
+	writer := bestEffortWriter{writer: errorWriter{}}
+	data := []byte("OpenVPN output")
+	written, err := writer.Write(data)
+	if err != nil || written != len(data) {
+		t.Fatalf("Write = %d, %v", written, err)
 	}
 }
 
@@ -89,4 +131,10 @@ func TestErrorCodeDoesNotIncludeDetails(t *testing.T) {
 	if strings.Contains(userMessage(errorCode(err)), "secret") {
 		t.Fatal("user message included internal details")
 	}
+}
+
+type errorWriter struct{}
+
+func (errorWriter) Write([]byte) (int, error) {
+	return 0, errors.New("test log failure")
 }

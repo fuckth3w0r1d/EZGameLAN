@@ -7,7 +7,7 @@ import (
 	"errors"
 )
 
-const PipeName = "EZGameLAN-v1"
+const PipeName = "EZGameLAN-v2"
 
 type Handler func(context.Context, Request) Response
 

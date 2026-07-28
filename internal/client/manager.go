@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -14,16 +16,21 @@ import (
 	"sync"
 	"time"
 
+	"github.com/r3t2/ezgamelan/internal/atomicfile"
 	"github.com/r3t2/ezgamelan/internal/ipc"
 	"github.com/r3t2/ezgamelan/internal/join"
+	"github.com/r3t2/ezgamelan/internal/netcfg"
 )
 
 const maxRestartAttempts = 5
 
 type Options struct {
-	OpenVPNPath string
-	ConfigPath  string
-	HTTPClient  *http.Client
+	OpenVPNPath       string
+	ConfigPath        string
+	AdapterMarkerPath string
+	HTTPClient        *http.Client
+	Logger            *slog.Logger
+	ProcessLog        io.Writer
 }
 
 type processStopSignal interface {
@@ -46,13 +53,24 @@ type Manager struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+	logger *slog.Logger
 }
 
 func New(options Options) (*Manager, error) {
 	if !filepath.IsAbs(options.OpenVPNPath) || !filepath.IsAbs(options.ConfigPath) {
 		return nil, errors.New("E_INSTALL_PATH: OpenVPN 和配置路径必须是绝对路径")
 	}
+	if options.AdapterMarkerPath != "" && !filepath.IsAbs(options.AdapterMarkerPath) {
+		return nil, errors.New("E_INSTALL_PATH: 网卡清理标记路径必须是绝对路径")
+	}
 	ctx, cancel := context.WithCancel(context.Background())
+	logger := options.Logger
+	if logger == nil {
+		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+	if options.ProcessLog == nil {
+		options.ProcessLog = io.Discard
+	}
 	manager := &Manager{
 		options: options,
 		status: ipc.Status{
@@ -60,6 +78,7 @@ func New(options Options) (*Manager, error) {
 		},
 		ctx:    ctx,
 		cancel: cancel,
+		logger: logger,
 	}
 	if info, err := os.Lstat(options.ConfigPath); err == nil && info.Mode().IsRegular() {
 		manager.status.State = ipc.StateDisconnected
@@ -86,6 +105,12 @@ func (m *Manager) Handle(ctx context.Context, request ipc.Request) ipc.Response 
 	status := m.Status()
 	if err != nil {
 		code := errorCode(err)
+		m.logger.Error(
+			"client operation failed",
+			"action", request.Action,
+			"code", code,
+			"error", err,
+		)
 		return ipc.Response{
 			Version: ipc.Version,
 			OK:      false,
@@ -93,6 +118,9 @@ func (m *Manager) Handle(ctx context.Context, request ipc.Request) ipc.Response 
 			Message: userMessage(code),
 			Status:  status,
 		}
+	}
+	if request.Action != ipc.ActionStatus {
+		m.logger.Info("client operation completed", "action", request.Action)
 	}
 	return ipc.Response{
 		Version: ipc.Version,
@@ -233,7 +261,7 @@ func (m *Manager) launchLocked() (*exec.Cmd, processStopSignal, chan struct{}, u
 		return nil, nil, nil, 0, fmt.Errorf("E_OPENVPN_START: 准备 OpenVPN: %w", err)
 	}
 	command.Env = minimalEnvironment()
-	command.Stdout = &boundedLog{}
+	command.Stdout = bestEffortWriter{writer: m.options.ProcessLog}
 	command.Stderr = command.Stdout
 	if err := command.Start(); err != nil {
 		stopSignal.Close()
@@ -247,6 +275,7 @@ func (m *Manager) launchLocked() (*exec.Cmd, processStopSignal, chan struct{}, u
 	m.processStop = stopSignal
 	m.processDone = done
 	m.status = ipc.Status{State: ipc.StateConnecting}
+	m.logger.Info("OpenVPN process started", "pid", command.Process.Pid)
 	m.wg.Add(1)
 	go func() {
 		defer m.wg.Done()
@@ -268,7 +297,7 @@ func (m *Manager) supervise(
 	currentGeneration := generation
 	restarts := 0
 	for {
-		_ = current.Wait()
+		waitErr := current.Wait()
 		currentStop.Close()
 
 		m.mu.Lock()
@@ -279,6 +308,7 @@ func (m *Manager) supervise(
 		}
 		stop := m.stopWanted || m.ctx.Err() != nil
 		if stop {
+			m.logger.Info("OpenVPN process stopped")
 			if m.status.State != ipc.StateNotConfigured {
 				m.status = ipc.Status{State: ipc.StateDisconnected}
 			}
@@ -286,6 +316,11 @@ func (m *Manager) supervise(
 			close(currentDone)
 			return
 		}
+		m.logger.Warn(
+			"OpenVPN process exited unexpectedly",
+			"error", waitErr,
+			"restart_attempt", restarts+1,
+		)
 		m.status = ipc.Status{State: ipc.StateError, ErrorCode: "E_OPENVPN_EXIT"}
 		m.mu.Unlock()
 		close(currentDone)
@@ -329,15 +364,29 @@ func (m *Manager) monitorVirtualIP(generation uint64, done <-chan struct{}) {
 	for {
 		select {
 		case <-ticker.C:
-			ip := findVirtualIP()
+			ip, adapterName, tapCandidate := findVirtualInterface()
 			if ip == "" {
 				continue
 			}
+			adapterName = m.renameVirtualAdapter(adapterName, tapCandidate)
+			connected := false
 			m.mu.Lock()
 			if m.generation == generation && m.process != nil {
-				m.status = ipc.Status{State: ipc.StateConnected, VirtualIP: ip}
+				m.status = ipc.Status{
+					State:       ipc.StateConnected,
+					VirtualIP:   ip,
+					AdapterName: adapterName,
+				}
+				connected = true
 			}
 			m.mu.Unlock()
+			if connected {
+				m.logger.Info(
+					"virtual LAN connected",
+					"virtual_ip", ip,
+					"adapter", adapterName,
+				)
+			}
 			return
 		case <-done:
 			return
@@ -347,26 +396,93 @@ func (m *Manager) monitorVirtualIP(generation uint64, done <-chan struct{}) {
 	}
 }
 
-func findVirtualIP() string {
-	addresses, err := net.InterfaceAddrs()
+func findVirtualInterface() (string, string, bool) {
+	interfaces, err := net.Interfaces()
 	if err != nil {
-		return ""
+		return "", "", false
 	}
-	for _, address := range addresses {
-		var ip net.IP
-		switch value := address.(type) {
-		case *net.IPNet:
-			ip = value.IP
-		case *net.IPAddr:
-			ip = value.IP
+	for _, networkInterface := range interfaces {
+		addresses, err := networkInterface.Addrs()
+		if err != nil {
+			continue
 		}
-		ip4 := ip.To4()
-		if ip4 != nil && ip4[0] == 10 && ip4[1] == 86 && ip4[2] == 0 &&
-			ip4[3] >= 10 && ip4[3] <= 19 {
-			return ip4.String()
+		for _, address := range addresses {
+			var ip net.IP
+			switch value := address.(type) {
+			case *net.IPNet:
+				ip = value.IP
+			case *net.IPAddr:
+				ip = value.IP
+			}
+			ip4 := ip.To4()
+			if ip4 != nil && ip4[0] == 10 && ip4[1] == 86 && ip4[2] == 0 &&
+				ip4[3] >= 10 && ip4[3] <= 19 {
+				hardwareAddress := networkInterface.HardwareAddr
+				tapCandidate := networkInterface.Name == "OpenVPN TAP-Windows6" ||
+					networkInterface.Name == netcfg.AdapterName ||
+					(len(hardwareAddress) == 6 &&
+						hardwareAddress[0] == 0x00 &&
+						hardwareAddress[1] == 0xff)
+				if !tapCandidate {
+					continue
+				}
+				return ip4.String(), networkInterface.Name, tapCandidate
+			}
 		}
 	}
-	return ""
+	return "", "", false
+}
+
+func (m *Manager) renameVirtualAdapter(currentName string, tapCandidate bool) string {
+	if currentName == "" || currentName == netcfg.AdapterName {
+		return currentName
+	}
+	if !tapCandidate {
+		m.logger.Warn(
+			"adapter rename skipped because TAP identity was not confirmed",
+			"adapter", currentName,
+		)
+		return currentName
+	}
+	markerPath := m.options.AdapterMarkerPath
+	if markerPath == "" {
+		m.logger.Warn(
+			"adapter rename skipped because cleanup marker is unavailable",
+			"adapter", currentName,
+		)
+		return currentName
+	}
+	createdMarker := false
+	if info, err := os.Lstat(markerPath); errors.Is(err, os.ErrNotExist) {
+		if err := atomicfile.Create(markerPath, []byte(currentName+"\n"), 0o600); err != nil {
+			m.logger.Warn("adapter rename marker failed", "error", err)
+			return currentName
+		}
+		createdMarker = true
+	} else if err != nil || !info.Mode().IsRegular() {
+		m.logger.Warn("adapter rename marker is invalid", "error", err)
+		return currentName
+	}
+
+	ctx, cancel := context.WithTimeout(m.ctx, 5*time.Second)
+	defer cancel()
+	if err := netcfg.RenameAdapter(ctx, currentName, netcfg.AdapterName); err != nil {
+		if createdMarker {
+			_ = os.Remove(markerPath)
+		}
+		m.logger.Warn(
+			"adapter rename failed",
+			"adapter", currentName,
+			"error", err,
+		)
+		return currentName
+	}
+	m.logger.Info(
+		"virtual adapter renamed",
+		"from", currentName,
+		"to", netcfg.AdapterName,
+	)
+	return netcfg.AdapterName
 }
 
 func restartDelay(attempt int) time.Duration {
@@ -386,6 +502,15 @@ func minimalEnvironment() []string {
 		}
 	}
 	return result
+}
+
+type bestEffortWriter struct {
+	writer io.Writer
+}
+
+func (w bestEffortWriter) Write(data []byte) (int, error) {
+	_, _ = w.writer.Write(data)
+	return len(data), nil
 }
 
 func errorCode(err error) string {
@@ -421,25 +546,4 @@ func userMessage(code string) string {
 	default:
 		return "EZGameLAN 操作失败，请稍后重试"
 	}
-}
-
-type boundedLog struct {
-	mu   sync.Mutex
-	data []byte
-}
-
-func (b *boundedLog) Write(data []byte) (int, error) {
-	const limit = 64 << 10
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if len(data) >= limit {
-		b.data = append(b.data[:0], data[len(data)-limit:]...)
-		return len(data), nil
-	}
-	if overflow := len(b.data) + len(data) - limit; overflow > 0 {
-		copy(b.data, b.data[overflow:])
-		b.data = b.data[:len(b.data)-overflow]
-	}
-	b.data = append(b.data, data...)
-	return len(data), nil
 }

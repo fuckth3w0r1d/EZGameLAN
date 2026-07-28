@@ -54,3 +54,18 @@ func ParseLink(raw string) (Invitation, error) {
 	}
 	return NewInvitation(urls[0], parsed.Fragment)
 }
+
+// ParseInput accepts either the clickable ezgamelan:// invitation or an HTTPS
+// enrollment URL followed by its token. The latter may be separated by spaces
+// or a newline so users can paste both values into one field.
+func ParseInput(raw string) (Invitation, error) {
+	raw = strings.TrimSpace(raw)
+	if strings.HasPrefix(strings.ToLower(raw), "ezgamelan:") {
+		return ParseLink(raw)
+	}
+	fields := strings.Fields(raw)
+	if len(fields) != 2 {
+		return Invitation{}, errors.New("E_JOIN_LINK: 请粘贴完整加入链接，或 URL 和 Token")
+	}
+	return NewInvitation(fields[0], fields[1])
+}
