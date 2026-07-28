@@ -1,137 +1,44 @@
 # EZGameLAN
 
-EZGameLAN 是一个面向个人和朋友的轻量虚拟局域网工具。数据面使用中心
-OpenVPN TAP 服务器，首版支持单个 LAN 和最多 10 台 Windows 客户端。
+## 1. 项目使用场景
 
-当前已经实现服务端最小闭环：
+EZGameLAN 是面向个人和朋友联机的轻量虚拟局域网工具，适合 Minecraft Java
+Edition、L4D2 等支持局域网或 IP 直连的游戏。
 
-```text
-go build -o ezlanctl ./cmd/ezlanctl
+- 单个虚拟局域网，最多 10 台 Windows 客户端；
+- 默认虚拟网段为 `10.86.0.0/24`；
+- 所有虚拟局域网流量经中心 Linux 服务器转发；
+- 支持广播、多播和虚拟 IP 直连；
+- 客户端保持系统默认路由和 DNS；
+- 玩家通过一次性加入链接连接，无需接触 OpenVPN 配置。
 
-sudo ./ezlanctl init --host HOST
-sudo ./ezlanctl invite alice
-sudo ./ezlanctl serve
-sudo ./ezlanctl revoke alice
-sudo ./ezlanctl list
-sudo ./ezlanctl status
-```
+## 2. 项目技术栈
 
-`init` 会生成本地 CA、OpenVPN 服务端配置和 `tls-crypt-v2` 密钥。`invite`
-默认生成 30 分钟有效的“HTTPS URL + Token”一次性加入链接，也可通过
-`--file PATH` 生成离线 `.ezlan`。公网 HTTPS 由已有 Nginx 提供，Go 加入服务
-只监听 `127.0.0.1:21112`。
+- **数据面：** OpenVPN 2.6 TAP、TAP-Windows6、`client-to-client`；
+- **服务端：** Linux、systemd、Go、文件状态；
+- **公网入口：** Nginx HTTPS，仅代理固定加入路径；
+- **Windows 客户端：** Go、Windows Service、原生 Win32 界面、Named Pipe；
+- **管理端：** Go 内嵌 HTML/CSS/JavaScript、本机回环 WebUI、系统 OpenSSH；
+- **状态管理：** JSON 文件、证书和 CRL，不使用数据库；
+- **主要 Go 依赖：** 标准库和 `golang.org/x/sys/windows`。
 
-Windows 端使用自己的简易客户端和后台 Service，不依赖 OpenVPN GUI：
+## 3. 服务端部署方法
 
-- `ezgamelan-client.exe` 是普通用户托盘界面，使用一个输入框接收完整加入链接
-  或 URL + Token，并提供连接、断开、自动状态刷新和日志导出；
-- `ezgamelan-service.exe` 是唯一的自有特权进程；
-- 客户端与 Service 使用受限、版本化、定长上限的本机 Named Pipe；
-- Service 通过系统证书库访问 HTTPS，在请求体中提交一次性 Token；
-- 领取到的 `.ezlan` 经过严格校验后才生成固定的 `ezgamelan.ovpn`；
-- 活动配置保存在 `%ProgramData%\EZGameLAN\config`，仅 Administrators 和
-  `SYSTEM` 可读；
-- Service 直接启动一个 `openvpn.exe`，检查虚拟 IP，并对异常退出做有上限的
-  重试；
-- 连接成功后 TAP 友好名称显示为 `EZGameLAN`；
-- Service 日志单文件 256 KiB，只保留当前文件和两份备份；UI 日志单文件
-  128 KiB，只保留一份备份；导出时截取最近内容并再次脱敏。
-
-## 轻量管理端
-
-管理员使用独立的 `EZGameLAN-Admin.exe`，它不装进玩家客户端，也不在服务器
-开放新的 Web 端口。EXE 只在管理员电脑的 `127.0.0.1` 随机端口临时启动一个
-内嵌 WebUI，并通过系统 OpenSSH 调用服务器上的固定命令：
-
-```text
-sudo -n /usr/local/bin/ezlanctl admin-stdio
-```
-
-管理界面可查看两个服务的健康状态、设备凭据和实时在线信息，生成一次性加入
-链接，断开或吊销设备，重启项目服务，以及导出最近的有界脱敏诊断。OpenVPN
-在线状态来自 root 专用的 `status-version 3` 文件；吊销在线设备时通过 root
-专用 Unix management socket 立即断开，不必重启所有玩家。
-
-管理端直接复用 `~/.ssh/config` 中的主机别名、SSH 密钥和 agent。首次使用前
-在终端执行一次 `ssh s0`，确认服务器指纹和密钥登录可用，然后双击
-`EZGameLAN-Admin.exe`。界面默认使用 `s0`，也可输入其他 SSH 配置别名。
-服务器不接收或保存 SSH 私钥。
-
-在 Linux 开发机生成独立的 Windows x64 管理端：
+服务端需要 Linux、systemd、Nginx 和 OpenVPN 2.6。先在本地构建 Linux x64
+二进制：
 
 ```bash
-./packaging/windows/build-admin.sh
-```
-
-产物为 `dist/EZGameLAN-Admin.exe`。它只依赖系统浏览器和 `ssh.exe`，没有
-Electron、Node.js 或其他前端运行时。
-
-Windows x64 开发构建：
-
-```powershell
-$env:CGO_ENABLED = "0"
-$env:GOOS = "windows"
-$env:GOARCH = "amd64"
-
-New-Item -ItemType Directory -Force dist | Out-Null
-go build -trimpath -o dist/ezgamelan-service.exe ./cmd/ezgamelan-service
-go build -trimpath -ldflags "-H=windowsgui" `
-  -o dist/ezgamelan-client.exe ./cmd/ezgamelan-client
-```
-
-TAP-Windows6 驱动需要在安装阶段一次性安装。Service 启动后，玩家只运行
-`ezgamelan-client.exe`，将管理员给出的完整 `ezgamelan://` 加入链接粘贴到
-唯一输入框，然后点击“加入并连接”。分开收到 URL 和 Token 时，也可将二者用
-空格或换行分隔后一起粘贴。
-
-当前 Windows 代码已经完成加入领取、严格配置生成、Named Pipe、Service
-生命周期和原生 Win32 界面，并已在 Windows x64 实机验证安装、TAP 地址分配与
-服务器连接。后续仍需用两台 Windows 电脑完成互通、游戏联机、重连和完整卸载
-验证。
-
-最终分发物是单个 `EZGameLAN-Setup.exe`。玩家只需双击这个文件并确认一次
-UAC，不接触 PowerShell 脚本、MSI 或内部文件。
-
-在 Linux 开发机生成安装包：
-
-```bash
-./packaging/windows/build-release.sh \
-  --openvpn-msi /tmp/OpenVPN-2.6.21-I001-amd64.msi
-```
-
-也可在 Windows 开发机生成：
-
-```powershell
-.\packaging\windows\build-release.ps1 `
-  -OpenVPNMSI PATH\OpenVPN-2.6.21-I001-amd64.msi
-```
-
-构建过程交叉编译客户端、Service 和安装启动器，将固定 OpenVPN MSI 以及来源、
-许可证和 SHA-256 封装进一个 EXE。启动器先校验自身载荷；安装阶段再次校验
-OpenVPN MSI 的固定 SHA-256 和 Authenticode 签名，只选择 OpenVPN 核心与
-TAP-Windows6。安装器同时注册 EZGameLAN Service、开始菜单入口和
-`ezgamelan://` 协议，卸载入口出现在 Windows“已安装的应用”中。
-
-开发检查：
-
-```bash
-gofmt -w ./cmd ./internal
-go test ./...
-go vet ./...
-
-CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
-  go build -trimpath -o /tmp/ezgamelan-service.exe ./cmd/ezgamelan-service
-CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
-  go build -trimpath -ldflags '-H=windowsgui' \
-  -o /tmp/ezgamelan-client.exe ./cmd/ezgamelan-client
-```
-
-Linux 服务器部署：
-
-```text
+GOCACHE=/tmp/ezgamelan-gocache \
+GOMODCACHE=/tmp/ezgamelan-gomodcache \
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-  go build -trimpath -o dist/ezlanctl-linux-amd64 ./cmd/ezlanctl
+go build -trimpath \
+  -o dist/ezlanctl-linux-amd64 \
+  ./cmd/ezlanctl
+```
 
+将仓库和构建产物同步到服务器后执行：
+
+```bash
 sudo ./packaging/linux/install.sh \
   --host VPN_HOST \
   --enroll-url https://WEB_HOST/ezgamelan/v1/enroll \
@@ -139,15 +46,117 @@ sudo ./packaging/linux/install.sh \
   --binary ./dist/ezlanctl-linux-amd64
 ```
 
-安装器保留已经存在的 CA 和配置，安装并启动 OpenVPN 与一次性加入服务。
-首次从旧版配置升级时会保留 `/etc/ezgamelan/config.json.v1.bak`，回滚旧二进制
-时可恢复该文件。`--admin-user` 只安装一条精确 sudoers 规则，允许该 SSH 用户
-执行 `ezlanctl admin-stdio`；sudo 权限范围仅包含这一个完整命令。
+将以下片段包含到现有 Nginx HTTPS `server` 块：
 
-将 [`packaging/linux/nginx-ezgamelan-location.conf`](packaging/linux/nginx-ezgamelan-location.conf)
-包含到现有 HTTPS `server` 块，然后先执行 `nginx -t` 再 reload。该片段只精确
-匹配 `/ezgamelan/v1/enroll`，不会接管静态网页的 `location /`。
+```text
+packaging/linux/nginx-ezgamelan-location.conf
+```
 
-云防火墙只需额外开放 OpenVPN 的 `21111/UDP`；注册领取复用已有 `443/TCP`。
+检查并重载 Nginx：
 
-架构和开发约束分别见 [DESIGN.md](DESIGN.md) 与 [AGENTS.md](AGENTS.md)。
+```bash
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+云防火墙开放：
+
+```text
+21111/UDP    OpenVPN
+443/TCP      HTTPS 加入链接
+```
+
+检查服务：
+
+```bash
+systemctl status ezgamelan-openvpn.service
+systemctl status ezgamelan-enroll.service
+```
+
+常用服务端命令：
+
+```bash
+sudo ezlanctl status
+sudo ezlanctl list
+sudo ezlanctl invite DEVICE_NAME
+sudo ezlanctl revoke DEVICE_NAME
+```
+
+## 4. 客户端使用方法
+
+Windows x64 客户端使用单文件安装包：
+
+```text
+EZGameLAN-Setup.exe
+```
+
+安装和加入步骤：
+
+1. 双击安装包并确认一次 UAC；
+2. 打开 EZGameLAN；
+3. 将管理员提供的完整 `ezgamelan://` 加入链接粘贴到输入框；
+4. 点击“加入并连接”；
+5. 显示“已连接”和 `10.86.0.x` 虚拟 IP 后启动游戏；
+6. 游戏优先使用其他玩家的虚拟 IP 直连。
+
+客户端也接受用空格或换行分隔的 HTTPS URL 与 Token。完成首次加入后，只需使用
+“连接”和“断开”。虚拟网卡友好名称为 `EZGameLAN`。
+
+遇到连接问题时点击“导出日志”。导出内容包含最近的有界、脱敏客户端与 Service
+日志。
+
+生成 Windows 安装包：
+
+```bash
+./packaging/windows/build-release.sh \
+  --openvpn-msi /tmp/OpenVPN-2.6.21-I001-amd64.msi
+```
+
+## 5. 管理端配置使用方法
+
+构建 Windows x64 管理端：
+
+```bash
+./packaging/windows/build-admin.sh
+```
+
+生成文件：
+
+```text
+dist/EZGameLAN-Admin.exe
+```
+
+在管理员 Windows 电脑安装或启用 OpenSSH Client，并配置
+`%USERPROFILE%\.ssh\config`：
+
+```sshconfig
+Host s0
+    HostName SERVER_HOST
+    User SSH_USER
+    IdentityFile ~/.ssh/id_ed25519
+```
+
+先在终端确认 SSH 密钥登录和服务器指纹：
+
+```powershell
+ssh s0
+```
+
+然后双击 `EZGameLAN-Admin.exe`。浏览器会打开仅监听
+`127.0.0.1` 随机端口的管理界面，默认 SSH 别名为 `s0`。
+
+管理界面支持：
+
+- 查看 OpenVPN、加入服务和设备状态；
+- 查看在线设备、虚拟 IP、连接时间和流量；
+- 生成并复制一次性加入链接；
+- 断开在线设备；
+- 吊销设备并立即断开连接；
+- 重启 OpenVPN 或加入服务；
+- 查看和导出有界、脱敏的服务端诊断。
+
+服务器端管理权限由部署参数 `--admin-user SSH_USER` 配置，只允许执行：
+
+```text
+sudo -n /usr/local/bin/ezlanctl admin-stdio
+```
