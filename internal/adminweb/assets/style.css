@@ -1,0 +1,209 @@
+:root {
+  color-scheme: light;
+  --bg: #f4f6f3;
+  --surface: #ffffff;
+  --ink: #18201b;
+  --muted: #657168;
+  --line: #dfe5df;
+  --green: #1f6d49;
+  --green-soft: #e5f2ea;
+  --amber: #9a6715;
+  --amber-soft: #fff3d7;
+  --red: #a13a31;
+  --red-soft: #fae9e7;
+  --shadow: 0 16px 44px rgba(30, 48, 37, .08);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-width: 880px;
+  background:
+    radial-gradient(circle at 8% 0%, rgba(62, 129, 90, .12), transparent 30rem),
+    var(--bg);
+  color: var(--ink);
+  font: 14px/1.5 "Segoe UI", "Microsoft YaHei UI", sans-serif;
+}
+
+button, input { font: inherit; }
+
+button {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 8px 14px;
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+  font-weight: 600;
+}
+
+button:hover { border-color: #aeb9b0; background: #f8faf8; }
+button:disabled { opacity: .48; cursor: default; }
+button.primary { border-color: var(--green); background: var(--green); color: white; }
+button.primary:hover { background: #185b3c; }
+button.danger { border-color: #e3bbb6; color: var(--red); background: #fff8f7; }
+button.quiet { background: transparent; }
+
+input {
+  height: 39px;
+  border: 1px solid #cbd4cd;
+  border-radius: 9px;
+  padding: 0 12px;
+  background: white;
+  color: var(--ink);
+  outline: none;
+}
+
+input:focus { border-color: var(--green); box-shadow: 0 0 0 3px rgba(31, 109, 73, .12); }
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+  padding: 28px max(36px, calc((100vw - 1180px) / 2));
+  background: rgba(255, 255, 255, .86);
+  border-bottom: 1px solid var(--line);
+  backdrop-filter: blur(8px);
+}
+
+h1, h2, p { margin: 0; }
+h1 { font-size: 27px; letter-spacing: -.4px; }
+h2 { font-size: 20px; letter-spacing: -.2px; }
+.eyebrow {
+  color: var(--green);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .13em;
+  text-transform: uppercase;
+}
+
+.server-control { width: 330px; }
+.server-control label, .invite-form label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.server-control input, .invite-form input { min-width: 0; flex: 1; }
+.inline { display: flex; gap: 8px; }
+
+main {
+  width: min(1180px, calc(100vw - 72px));
+  margin: 28px auto 60px;
+}
+
+.notice {
+  margin-bottom: 16px;
+  border: 1px solid #e6c981;
+  border-radius: 10px;
+  padding: 11px 14px;
+  background: var(--amber-soft);
+  color: #785018;
+}
+.notice.error { border-color: #e5bab5; background: var(--red-soft); color: var(--red); }
+.hidden { display: none !important; }
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: 1.35fr 1fr 1fr 1fr;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.card, .panel {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+.card { min-height: 122px; padding: 20px; }
+.hero-card { background: linear-gradient(145deg, #1f6d49, #164c35); color: white; border: 0; }
+.card-label { display: block; margin-bottom: 17px; color: var(--muted); font-size: 12px; }
+.hero-card .card-label, .hero-card small { color: rgba(255,255,255,.72); }
+.card strong { display: block; font-size: 23px; line-height: 1.25; overflow-wrap: anywhere; }
+.card small { display: block; margin-top: 6px; color: var(--muted); }
+
+.state.active { color: var(--green); }
+.state.failed, .state.inactive { color: var(--red); }
+.state.activating, .state.deactivating, .state.unknown { color: var(--amber); }
+
+.panel { margin-top: 18px; overflow: hidden; }
+.panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 19px 22px;
+  border-bottom: 1px solid var(--line);
+}
+.actions { display: flex; gap: 8px; }
+
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; }
+th, td { padding: 13px 18px; border-bottom: 1px solid #edf0ed; text-align: left; white-space: nowrap; }
+th { color: var(--muted); font-size: 11px; letter-spacing: .04em; text-transform: uppercase; }
+tbody tr:last-child td { border-bottom: 0; }
+.right { text-align: right; }
+.empty { padding: 34px; color: var(--muted); text-align: center; }
+.device-name { font-weight: 700; }
+.subtle { color: var(--muted); font-size: 12px; }
+.badge {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 3px 9px;
+  background: #edf1ee;
+  color: #566159;
+  font-size: 12px;
+  font-weight: 600;
+}
+.badge.active, .badge.online { background: var(--green-soft); color: var(--green); }
+.badge.pending { background: var(--amber-soft); color: var(--amber); }
+.badge.revoked, .badge.offline { background: var(--red-soft); color: var(--red); }
+.row-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.row-actions button { padding: 6px 10px; font-size: 12px; }
+
+.accent-panel { border-color: #b9d7c5; }
+.invite-form, .invite-result { padding: 20px 22px; }
+.invite-form { max-width: 620px; }
+.invite-result { border-top: 1px solid var(--line); background: #f8fbf9; }
+.invite-result p { margin-bottom: 10px; color: var(--muted); }
+.copy-row { display: flex; gap: 8px; }
+.copy-row input { flex: 1; font-family: Consolas, monospace; font-size: 12px; }
+.invite-result small { display: block; margin-top: 8px; color: var(--muted); }
+
+.diagnostics {
+  max-height: 370px;
+  min-height: 110px;
+  margin: 0;
+  padding: 18px 22px;
+  overflow: auto;
+  background: #18201b;
+  color: #d9e5dd;
+  font: 12px/1.55 Consolas, "Cascadia Mono", monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.maintenance {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  padding: 13px 22px;
+  border-top: 1px solid var(--line);
+}
+.maintenance span { margin-right: auto; color: var(--muted); font-size: 12px; }
+
+footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: min(1180px, calc(100vw - 72px));
+  margin: 0 auto 30px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+@media (max-width: 980px) {
+  .summary-grid { grid-template-columns: 1fr 1fr; }
+}

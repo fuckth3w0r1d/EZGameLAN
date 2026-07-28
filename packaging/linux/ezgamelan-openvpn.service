@@ -13,6 +13,8 @@ RestartSec=3s
 TimeoutStopSec=15s
 KillSignal=SIGTERM
 UMask=0077
+RuntimeDirectory=ezgamelan
+RuntimeDirectoryMode=0700
 
 NoNewPrivileges=true
 PrivateTmp=true
@@ -21,7 +23,7 @@ ProtectSystem=strict
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
-ReadWritePaths=/var/lib/ezgamelan
+ReadWritePaths=/var/lib/ezgamelan /run/ezgamelan
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
 
 [Install]

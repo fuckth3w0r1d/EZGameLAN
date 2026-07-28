@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EZGameLAN 管理</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">轻量虚拟局域网</p>
+      <h1>EZGameLAN 管理</h1>
+    </div>
+    <div class="server-control">
+      <label for="server">SSH 别名</label>
+      <div class="inline">
+        <input id="server" maxlength="128" autocomplete="off" spellcheck="false">
+        <button id="refresh" class="primary">刷新</button>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <div id="notice" class="notice hidden" role="status"></div>
+
+    <section class="summary-grid" aria-label="服务器概览">
+      <article class="card hero-card">
+        <span class="card-label">服务器</span>
+        <strong id="public-host">—</strong>
+        <small id="endpoint">等待连接</small>
+      </article>
+      <article class="card">
+        <span class="card-label">OpenVPN</span>
+        <strong id="openvpn-state" class="state">—</strong>
+        <small>虚拟 LAN 数据面</small>
+      </article>
+      <article class="card">
+        <span class="card-label">加入服务</span>
+        <strong id="enroll-state" class="state">—</strong>
+        <small>一次性链接领取</small>
+      </article>
+      <article class="card">
+        <span class="card-label">在线设备</span>
+        <strong id="online-count">—</strong>
+        <small id="device-count">共 — 台已登记</small>
+      </article>
+    </section>
+
+    <section class="panel">
+      <div class="panel-heading">
+        <div>
+          <p class="eyebrow">成员与连接</p>
+          <h2>设备</h2>
+        </div>
+        <div class="actions">
+          <button id="new-invite" class="primary">生成加入链接</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>设备</th>
+              <th>凭据</th>
+              <th>连接</th>
+              <th>虚拟 IP</th>
+              <th>流量</th>
+              <th>证书到期</th>
+              <th class="right">操作</th>
+            </tr>
+          </thead>
+          <tbody id="devices">
+            <tr><td colspan="7" class="empty">正在读取服务器状态…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="invite-panel" class="panel accent-panel hidden">
+      <div class="panel-heading">
+        <div>
+          <p class="eyebrow">30 分钟内一次有效</p>
+          <h2>新设备加入链接</h2>
+        </div>
+        <button id="hide-invite" class="quiet">关闭</button>
+      </div>
+      <div class="invite-form">
+        <label for="device-name">设备名</label>
+        <div class="inline">
+          <input id="device-name" maxlength="32" placeholder="例如 alice-laptop"
+                 autocomplete="off" spellcheck="false">
+          <button id="create-invite" class="primary">生成</button>
+        </div>
+      </div>
+      <div id="invite-result" class="invite-result hidden">
+        <p>请将下面整条链接单独发送给对应朋友。链接领取后立即失效。</p>
+        <div class="copy-row">
+          <input id="invite-link" readonly>
+          <button id="copy-invite">复制链接</button>
+        </div>
+        <small id="invite-expiry"></small>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-heading">
+        <div>
+          <p class="eyebrow">有界且脱敏</p>
+          <h2>诊断与维护</h2>
+        </div>
+        <div class="actions">
+          <button id="diagnostics">读取诊断</button>
+          <button id="export-diagnostics" disabled>导出文本</button>
+        </div>
+      </div>
+      <pre id="diagnostic-output" class="diagnostics">尚未读取诊断信息。</pre>
+      <div class="maintenance">
+        <span>服务维护</span>
+        <button id="restart-enroll" class="quiet">重启加入服务</button>
+        <button id="restart-openvpn" class="danger">重启 OpenVPN</button>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <span id="updated-at">尚未刷新</span>
+    <button id="close-admin" class="quiet">退出管理端</button>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

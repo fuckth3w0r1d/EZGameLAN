@@ -15,6 +15,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/r3t2/ezgamelan/internal/admin"
 	"github.com/r3t2/ezgamelan/internal/config"
 	"github.com/r3t2/ezgamelan/internal/enroll"
 	"github.com/r3t2/ezgamelan/internal/ezlan"
@@ -56,6 +57,8 @@ func run(args []string) error {
 		return runList(*configPath, rest[1:])
 	case "status":
 		return runStatus(*configPath, rest[1:])
+	case "admin-stdio":
+		return runAdminStdio(*configPath, rest[1:])
 	case "help", "-h", "--help":
 		printUsage()
 		return nil
@@ -63,6 +66,22 @@ func run(args []string) error {
 		printUsage()
 		return fmt.Errorf("unknown command %q", rest[0])
 	}
+}
+
+func runAdminStdio(configPath string, args []string) error {
+	if len(args) != 0 {
+		return errors.New("admin-stdio does not accept arguments")
+	}
+	controller, err := admin.OpenController(configPath)
+	if err != nil {
+		return fmt.Errorf("E_CONFIG_ADMIN: %w", err)
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	if err := admin.ServeStream(ctx, os.Stdin, os.Stdout, controller); err != nil {
+		return fmt.Errorf("E_INTERNAL_ADMIN: %w", err)
+	}
+	return nil
 }
 
 func runInit(configPath string, args []string) error {
@@ -209,7 +228,7 @@ func runRevoke(configPath string, args []string) error {
 	if err := manager.Revoke(args[0]); err != nil {
 		return fmt.Errorf("E_JOIN_REVOKE: %w", err)
 	}
-	fmt.Printf("已吊销：%s\n已有连接将在重新认证时失效；需要立即断开时重启 OpenVPN。\n", args[0])
+	fmt.Printf("已吊销：%s\n管理端的“吊销”操作还会立即断开在线连接。\n", args[0])
 	return nil
 }
 
@@ -276,5 +295,6 @@ Usage:
   ezlanctl [--config PATH] serve
   ezlanctl [--config PATH] revoke CLIENT_NAME
   ezlanctl [--config PATH] list
-  ezlanctl [--config PATH] status`)
+  ezlanctl [--config PATH] status
+  ezlanctl [--config PATH] admin-stdio`)
 }

@@ -29,6 +29,9 @@ func TestServerConfigUsesPureTAP(t *testing.T) {
 		"port 21111\n",
 		"dh none\n",
 		"cipher AES-256-GCM\n",
+		"status \"/run/ezgamelan/openvpn-status.log\" 5\n",
+		"status-version 3\n",
+		"management \"/run/ezgamelan/openvpn-management.sock\" unix\n",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("config missing %q:\n%s", want, got)

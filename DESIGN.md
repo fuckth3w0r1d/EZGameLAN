@@ -15,7 +15,7 @@ EZGameLAN 只解决一件事：让几位朋友像在同一局域网中一样联�
 5. 出问题时能看懂日志并重新加入。
 
 LAN 自动发现尽量支持，但虚拟 IP 直连是可靠路径。首版不追求账号、房间大厅、
-成员列表、聊天、P2P、Web 管理后台、自动更新和复杂诊断。
+聊天、P2P、服务器公网 Web 管理后台、自动更新和复杂诊断。
 
 ## 2. 最小架构
 
@@ -24,13 +24,18 @@ Linux 服务器
 ├── OpenVPN Server                         UDP/21111
 ├── Nginx（复用已有 HTTPS 站点）            TCP/443
 ├── ezlanctl serve（加入配置下载）          127.0.0.1:21112
-└── ezlanctl（init/invite/revoke）
+└── ezlanctl（init/invite/revoke/admin-stdio）
 
 Windows 玩家电脑
 ├── ezgamelan-client.exe（普通用户界面）
 ├── EZGameLAN Service（唯一自有特权进程）
 ├── openvpn.exe（由 Service 管理）
 └── TAP-Windows6
+
+管理员电脑
+└── EZGameLAN-Admin.exe
+    ├── 临时本机 WebUI                     127.0.0.1:随机端口
+    └── 系统 ssh → sudo ezlanctl admin-stdio
 ```
 
 核心取舍：
@@ -43,6 +48,7 @@ Windows 玩家电脑
 - 普通用户客户端通过受限 Named Pipe 请求加入、连接、断开和查看状态；
 - 服务端只有 OpenVPN、已有 Nginx 和一个很小的加入服务常驻；
 - 加入服务与管理 CLI 使用同一个 Go 可执行文件 `ezlanctl`；
+- 管理界面只在管理员电脑上按需运行，不在服务器开放管理端口；
 - 状态放在文件中，不使用数据库。
 
 增加自有 Service 的直接原因是让玩家不接触 OpenVPN GUI、配置目录和管理员
@@ -247,6 +253,12 @@ OpenVPN dev tap
 OpenVPN 分配 IP 和 MTU，项目代码只检查结果。客户端不接管默认路由、不修改
 DNS、不启用 IP forwarding，也不桥接物理网卡。
 
+OpenVPN 每 5 秒将机器可读的 `status-version 3` 状态写入
+`/run/ezgamelan/openvpn-status.log`，并在权限为 `0700` 的运行目录中创建
+Unix management socket。状态文件用于显示当前在线设备、虚拟地址、连接时间
+和字节计数；management socket 只用于查询状态和按 Client ID 断开连接。两者
+都不对公网监听，服务器重启后由 systemd 的 `RuntimeDirectory` 重新创建。
+
 纯 TAP 在手工测试中满足互通、广播、多播和游戏直连后就固定下来。若它连基本
 游戏通信都未通过，再回到数据面选型，不在首版堆叠 Linux bridge 和额外网络
 脚本。
@@ -265,6 +277,7 @@ ezlanctl invite <name> [--file PATH]
 ezlanctl revoke <name>
 ezlanctl list
 ezlanctl status
+ezlanctl admin-stdio
 ```
 
 职责：
@@ -272,9 +285,60 @@ ezlanctl status
 - `init` 创建配置、CA、服务端证书和 OpenVPN 配置；
 - `serve` 提供唯一的 `/v1/enroll` 接口；
 - `invite` 生成客户端凭据、Token 和链接或离线文件；
-- `revoke` 更新 CRL；已有连接会在重新认证时失效，需要立即断开时由管理员
-  重启 OpenVPN；
+- `revoke` 更新 CRL；
 - `list/status` 查看少量必要状态。
+- `admin-stdio` 通过标准输入输出提供固定、版本化的管理消息，仅供 SSH 调用。
+
+### 8.1 管理界面
+
+管理员使用单独分发的 `EZGameLAN-Admin.exe`。程序启动后只监听
+`127.0.0.1` 的随机端口，生成随机会话路径并打开系统浏览器。HTML、CSS 和
+JavaScript 直接嵌入 Go 可执行文件，不使用 Electron、Node.js 或外部 Web
+资源。关闭页面后，进程在短暂空闲超时后自行退出。
+
+管理界面提供当前实际需要的功能：
+
+- 查看 OpenVPN 和加入服务健康状态；
+- 查看设备的证书状态、在线状态、虚拟 IP、连接时间和收发字节数；
+- 创建一次性加入链接并复制；
+- 断开在线设备；
+- 吊销设备并立即断开其现有连接；
+- 只重启 EZGameLAN 的 OpenVPN 或加入服务；
+- 查看并导出有界、脱敏的最近诊断信息。
+
+管理员在界面中填写 SSH 配置别名，例如 `s0`。程序使用系统 `ssh` 客户端和
+用户已有的 SSH 配置、密钥或 agent，每个操作执行固定参数的命令：
+
+```text
+ssh -T -o BatchMode=yes HOST_ALIAS sudo -n /usr/local/bin/ezlanctl admin-stdio
+```
+
+请求和响应是单行 JSON，包含固定 `protocol_version` 和白名单动作；单个请求
+和响应都有大小、超时和并发上限。服务器端拒绝未知字段和未知动作。主机别名
+作为独立参数并经过长度和字符集校验，设备名仍使用既有严格校验；任何用户输入
+都不拼接进远端 shell 命令。
+
+部署时只为指定 SSH 用户安装以下精确 sudo 规则：
+
+```text
+USER ALL=(root) NOPASSWD: /usr/local/bin/ezlanctl admin-stdio
+```
+
+`admin-stdio` 是按请求启动的短进程，不是常驻 API。它只允许上述界面需要的
+固定操作，重启目标也只允许两个 EZGameLAN systemd unit。服务器不新增公网
+WebUI、管理监听端口、账号系统或数据库，已有 Nginx 静态网页和
+`location /` 保持不变。
+
+本机 WebUI 绑定回环地址，并同时校验随机会话路径、`Host` 和 `Origin`；响应
+使用禁止缓存和限制脚本来源的头部。加入链接只显示在当前页面，不写入日志和
+浏览器持久存储。SSH 失败时提示管理员先在终端完成主机指纹确认和密钥登录。
+
+### 8.2 扩展边界
+
+管理 JSON 协议通过版本号和能力列表演进。一个管理程序可切换多个本机 SSH
+别名，但当前仍坚持“一台服务器一个虚拟 LAN”。以后确有多个独立 LAN 的需求
+时，优先增加多个服务器配置，而不是先在一个 OpenVPN 实例中引入房间、租户、
+数据库和权限模型。
 
 文件布局保持简单：
 
@@ -290,8 +354,9 @@ CA 私钥只允许管理员命令读取；加入服务只能读取待领取目�
 刷新提示。
 
 服务器对公网开放 `21111/UDP`，并复用已有 Nginx 的 `443/TCP`。`21112/TCP`
-只绑定回环地址，加入接口之外没有管理 API。Nginx 的静态站点和已有路径不由
-EZGameLAN 安装脚本接管。
+只绑定回环地址，加入接口之外没有常驻管理 API。OpenVPN management socket
+和状态文件只存在于 root 可访问的 `/run/ezgamelan`。Nginx 的静态站点和已有
+路径不由 EZGameLAN 安装脚本接管。
 
 ## 9. 安全边界
 
@@ -306,6 +371,8 @@ EZGameLAN 安装脚本接管。
   服务端证书身份；
 - Token 随机、短期、使用后删除，服务端只保存哈希；
 - 私钥、Token 和完整加入链接不进入日志；
+- 管理权限只通过 SSH 密钥和精确的 `sudoers` 命令授予，不把管理凭据存入
+  EZGameLAN；
 - OpenVPN、TAP 驱动和安装包锁定版本与来源；
 - 所有进程启动使用独立参数，不经过 shell 拼接；
 - 卸载和清理只操作带 EZGameLAN 标识的文件与配置。
@@ -343,6 +410,12 @@ EZGameLAN 安装脚本接管。
 TAP-Windows6 组件。玩家双击 EXE 并确认一次 UAC，安装细节和内部脚本不展示。
 升级和卸载只验证当前真实使用路径。
 
+### 第五步：轻量管理端
+
+在服务端闭环和 Windows 玩家端完成真机连接后，增加 OpenVPN 机器可读状态、
+本地 Unix management socket、`admin-stdio` 和单独的本机管理 WebUI。管理端
+不装进玩家客户端，不改变数据面和 Nginx 公网边界。
+
 ## 11. 首版完成标准
 
 满足这些实际结果即可发布给朋友使用：
@@ -363,7 +436,7 @@ TAP-Windows6 组件。玩家双击 EXE 并确认一次 UAC，安装细节和内�
 
 - 多房间和公网大厅；
 - P2P 和打洞；
-- Web/Electron UI；
+- 服务器公网 WebUI 和 Electron UI；
 - Linux/macOS/手机客户端；
 - 自动更新和远程诊断；
 - 游戏端口插件；
@@ -378,3 +451,10 @@ TAP-Windows6 组件。玩家双击 EXE 并确认一次 UAC，安装细节和内�
 界面。Go 标准库没有覆盖这些 API；该依赖只编译进两个可执行文件，不增加常驻
 进程，也不引入动态运行时。版本锁定在 `go.mod` 和 `go.sum`。若后续 Go 标准库
 覆盖所需能力，可逐项替换并移除。
+
+管理端使用 Go 标准库的本机 HTTP、`embed`、进程执行和加密随机数能力，并调用
+Windows 系统自带或管理员已安装的 OpenSSH 客户端。当前需求只涉及少量表格和
+按钮，标准库与原生 HTML 已足够，因此不增加 Web 框架、前端工具链或新 Go
+依赖。管理端按需运行，服务器只增加 OpenVPN 现有进程的状态文件和 Unix
+socket；移除管理端时删除独立 EXE、精确 sudoers 文件和两条 OpenVPN 配置即可，
+不影响玩家连接数据和设备记录。

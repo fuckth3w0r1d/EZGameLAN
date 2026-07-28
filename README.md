@@ -37,6 +37,35 @@ Windows 端使用自己的简易客户端和后台 Service，不依赖 OpenVPN G
 - Service 日志单文件 256 KiB，只保留当前文件和两份备份；UI 日志单文件
   128 KiB，只保留一份备份；导出时截取最近内容并再次脱敏。
 
+## 轻量管理端
+
+管理员使用独立的 `EZGameLAN-Admin.exe`，它不装进玩家客户端，也不在服务器
+开放新的 Web 端口。EXE 只在管理员电脑的 `127.0.0.1` 随机端口临时启动一个
+内嵌 WebUI，并通过系统 OpenSSH 调用服务器上的固定命令：
+
+```text
+sudo -n /usr/local/bin/ezlanctl admin-stdio
+```
+
+管理界面可查看两个服务的健康状态、设备凭据和实时在线信息，生成一次性加入
+链接，断开或吊销设备，重启项目服务，以及导出最近的有界脱敏诊断。OpenVPN
+在线状态来自 root 专用的 `status-version 3` 文件；吊销在线设备时通过 root
+专用 Unix management socket 立即断开，不必重启所有玩家。
+
+管理端直接复用 `~/.ssh/config` 中的主机别名、SSH 密钥和 agent。首次使用前
+在终端执行一次 `ssh s0`，确认服务器指纹和密钥登录可用，然后双击
+`EZGameLAN-Admin.exe`。界面默认使用 `s0`，也可输入其他 SSH 配置别名。
+服务器不接收或保存 SSH 私钥。
+
+在 Linux 开发机生成独立的 Windows x64 管理端：
+
+```bash
+./packaging/windows/build-admin.sh
+```
+
+产物为 `dist/EZGameLAN-Admin.exe`。它只依赖系统浏览器和 `ssh.exe`，没有
+Electron、Node.js 或其他前端运行时。
+
 Windows x64 开发构建：
 
 ```powershell
@@ -106,12 +135,14 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
 sudo ./packaging/linux/install.sh \
   --host VPN_HOST \
   --enroll-url https://WEB_HOST/ezgamelan/v1/enroll \
+  --admin-user SSH_USER \
   --binary ./dist/ezlanctl-linux-amd64
 ```
 
 安装器保留已经存在的 CA 和配置，安装并启动 OpenVPN 与一次性加入服务。
 首次从旧版配置升级时会保留 `/etc/ezgamelan/config.json.v1.bak`，回滚旧二进制
-时可恢复该文件。
+时可恢复该文件。`--admin-user` 只安装一条精确 sudoers 规则，允许该 SSH 用户
+执行 `ezlanctl admin-stdio`；sudo 权限范围仅包含这一个完整命令。
 
 将 [`packaging/linux/nginx-ezgamelan-location.conf`](packaging/linux/nginx-ezgamelan-location.conf)
 包含到现有 HTTPS `server` 块，然后先执行 `nginx -t` 再 reload。该片段只精确

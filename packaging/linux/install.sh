@@ -4,19 +4,21 @@ set -euo pipefail
 usage() {
     cat <<'EOF'
 Usage:
-  sudo ./packaging/linux/install.sh --host HOST --binary PATH [--enroll-url URL]
+  sudo ./packaging/linux/install.sh --host HOST --binary PATH [options]
 
 Options:
   --host HOST          Public DNS name or IPv4 address used by OpenVPN.
   --binary PATH        Locally built Linux amd64 ezlanctl binary.
   --enroll-url URL     Public Nginx HTTPS endpoint. Defaults to
                        https://HOST/ezgamelan/v1/enroll.
+  --admin-user USER    SSH user allowed to run the fixed admin-stdio command.
 EOF
 }
 
 host=""
 binary=""
 enroll_url=""
+admin_user=""
 while (($# > 0)); do
     case "$1" in
         --host)
@@ -29,6 +31,10 @@ while (($# > 0)); do
             ;;
         --enroll-url)
             enroll_url="${2:-}"
+            shift 2
+            ;;
+        --admin-user)
+            admin_user="${2:-}"
             shift 2
             ;;
         -h | --help)
@@ -62,6 +68,13 @@ if [[ ! -x /usr/sbin/openvpn ]]; then
     echo "OpenVPN 2.6 is required at /usr/sbin/openvpn." >&2
     exit 1
 fi
+if [[ -n "$admin_user" ]]; then
+    if [[ ! "$admin_user" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] ||
+        ! getent passwd "$admin_user" >/dev/null; then
+        echo "Admin user is invalid or does not exist: $admin_user" >&2
+        exit 1
+    fi
+fi
 if ! /usr/sbin/openvpn --version | head -n 1 | grep -Eq '^OpenVPN 2\.6\.'; then
     echo "The installed OpenVPN version is outside the tested 2.6 series." >&2
     exit 1
@@ -81,6 +94,16 @@ install -m 0644 \
 install -m 0644 \
     "$script_dir/ezgamelan-enroll.service" \
     /etc/systemd/system/ezgamelan-enroll.service
+
+if [[ -n "$admin_user" ]]; then
+    sudoers_temp="$(mktemp)"
+    trap 'rm -f "$sudoers_temp"' EXIT
+    printf '%s ALL=(root) NOPASSWD: /usr/local/bin/ezlanctl admin-stdio\n' \
+        "$admin_user" >"$sudoers_temp"
+    chmod 0440 "$sudoers_temp"
+    /usr/sbin/visudo -cf "$sudoers_temp"
+    install -m 0440 "$sudoers_temp" /etc/sudoers.d/ezgamelan-admin
+fi
 
 systemctl daemon-reload
 systemctl enable ezgamelan-openvpn.service

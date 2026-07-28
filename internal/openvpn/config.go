@@ -12,6 +12,12 @@ import (
 	"github.com/r3t2/ezgamelan/internal/pki"
 )
 
+const (
+	RuntimeDir           = "/run/ezgamelan"
+	StatusPath           = RuntimeDir + "/openvpn-status.log"
+	ManagementSocketPath = RuntimeDir + "/openvpn-management.sock"
+)
+
 func ServerConfig(cfg config.Config) (string, error) {
 	ip, network, err := net.ParseCIDR(cfg.VirtualCIDR)
 	if err != nil {
@@ -51,6 +57,9 @@ func ServerConfig(cfg config.Config) (string, error) {
 		"allow-compression no",
 		"keepalive 10 60",
 		"tun-mtu " + strconv.Itoa(cfg.MTU),
+		"status " + quote(StatusPath) + " 5",
+		"status-version 3",
+		"management " + quote(ManagementSocketPath) + " unix",
 		"persist-key",
 		"persist-tun",
 		"verb 3",
