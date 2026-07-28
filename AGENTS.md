@@ -29,8 +29,9 @@
 - 加入服务只监听 `127.0.0.1:21112/TCP`；
 - Linux 使用 systemd；
 - 服务端管理使用同一个 Go 程序 `ezlanctl`；
-- Windows 复用官方 OpenVPN GUI、官方 Service 和 TAP-Windows6；
-- 自有 Windows 程序只有按需运行的 `ezgamelan-join.exe`；
+- Windows 分发 OpenVPN 核心和 TAP-Windows6，不依赖 OpenVPN GUI；
+- 自有 Windows Service 是唯一执行特权网络操作的进程；
+- 普通用户客户端通过版本化 Named Pipe 与 Service 通信；
 - 默认通过 `ezgamelan://` 一次性链接加入；
 - `.ezlan` 固定 JSON 作为离线导入格式；
 - 客户端不修改默认路由、DNS、IP forwarding 和物理网卡桥接；
@@ -55,7 +56,9 @@
 
 ```text
 cmd/ezlanctl/          Linux 管理命令和 serve 子命令
-cmd/ezgamelan-join/    Windows 一次性加入工具
+cmd/ezgamelan-client/  Windows 普通用户客户端
+cmd/ezgamelan-service/ Windows Service
+internal/ipc/           固定版本 Named Pipe 消息
 internal/invite/       Token 和 .ezlan
 internal/openvpn/      固定配置生成
 internal/pki/          最小证书操作

@@ -10,7 +10,7 @@ EZGameLAN 只解决一件事：让几位朋友像在同一局域网中一样联�
 
 1. 玩家安装一次，以后点加入链接就能连接；
 2. Minecraft Java Edition、L4D2 等游戏能稳定直连；
-3. 断网后由 OpenVPN 自己重连；
+3. 断网或进程异常后自动重连；
 4. 服务端和客户端尽量复用现成组件；
 5. 出问题时能看懂日志并重新加入。
 
@@ -27,24 +27,26 @@ Linux 服务器
 └── ezlanctl（init/invite/revoke）
 
 Windows 玩家电脑
-├── 官方 OpenVPN Community
-│   ├── OpenVPN GUI / 官方 Service
-│   └── TAP-Windows6
-└── ezgamelan-join.exe（按需运行）
+├── ezgamelan-client.exe（普通用户界面）
+├── EZGameLAN Service（唯一自有特权进程）
+├── openvpn.exe（由 Service 管理）
+└── TAP-Windows6
 ```
 
 核心取舍：
 
 - 数据面仍使用 OpenVPN TAP，不开发隧道协议；
 - 所有客户端流量经服务器转发；
-- 客户端复用官方 OpenVPN GUI、Service 和重连能力；
-- 项目只写一个很小的 Windows 加入工具，省去自有托盘 UI、Windows Service、
-  Named Pipe、网络状态机和防火墙管理器；
+- Windows 分发包复用 OpenVPN 核心和 TAP-Windows6，不安装或依赖 OpenVPN
+  GUI；
+- 自有 Windows Service 只管理一份配置和一个 OpenVPN 子进程；
+- 普通用户客户端通过受限 Named Pipe 请求加入、连接、断开和查看状态；
 - 服务端只有 OpenVPN、已有 Nginx 和一个很小的加入服务常驻；
 - 加入服务与管理 CLI 使用同一个 Go 可执行文件 `ezlanctl`；
 - 状态放在文件中，不使用数据库。
 
-这套结构比自研 Service + UI 少很多 Windows 特权代码，也更容易测试和维护。
+增加自有 Service 的直接原因是让玩家不接触 OpenVPN GUI、配置目录和管理员
+操作。Service 不实现隧道协议，不代理游戏数据，也不扩展为通用网络管理框架。
 
 ## 3. 玩家如何加入
 
@@ -64,16 +66,15 @@ ezgamelan://join?url=https%3A%2F%2FHOST%2Fezgamelan%2Fv1%2Fenroll#TOKEN
 
 ```text
 第一次安装 EZGameLAN
-→ 点击朋友发来的加入链接
-→ 加入工具下载设备配置
-→ 自动写入 OpenVPN GUI 的用户配置目录
-→ 发起连接
+→ 打开客户端
+→ 粘贴 HTTPS URL 和 Token（或直接点击完整加入链接）
+→ 点击“加入并连接”
 → 显示“已连接”和自己的虚拟 IP
 → 启动游戏
 ```
 
-之后连接和断开直接使用官方 OpenVPN GUI 托盘菜单。加入工具也允许粘贴链接，
-避免聊天软件拦截自定义 URI。
+之后只使用 EZGameLAN 客户端的“连接”和“断开”。高级 OpenVPN 参数不展示给
+玩家。
 
 管理员还可以生成离线文件：
 
@@ -81,7 +82,7 @@ ezgamelan://join?url=https%3A%2F%2FHOST%2Fezgamelan%2Fv1%2Fenroll#TOKEN
 ezlanctl invite alice --file alice.ezlan
 ```
 
-玩家双击 `.ezlan`，由同一个加入工具导入。链接是默认方式，文件是离线兜底，
+玩家双击 `.ezlan`，由同一个客户端导入。链接是默认方式，文件是离线兜底，
 两条路径最终使用同一种设备配置数据。
 
 ## 4. 加入 URL 和 Token
@@ -104,7 +105,7 @@ Nginx 和受信任证书，玩家不必输入端口、证书指纹或更多参�
 
 ### 4.2 领取
 
-`ezgamelan-join.exe` 从链接读取 HTTPS URL 和 Token，然后：
+EZGameLAN Service 接收客户端提交的 HTTPS URL 和 Token，然后：
 
 1. 连接 `https://HOST/ezgamelan/v1/enroll`；
 2. 使用系统证书库正常校验 Nginx 的 HTTPS 证书；
@@ -151,33 +152,38 @@ fragment 中，减少浏览器和 HTTP 日志记录；客户端不会把完整�
 `windows-driver tap-windows6`、服务端证书名称校验、禁用压缩，并排除默认路由、
 DNS、脚本、插件和外部文件引用。
 
-生成的 `.ovpn` 与私钥只允许当前用户、Administrators 和 `SYSTEM` 读取。导入
-成功后，文件方式会提示删除源 `.ezlan`。
+生成的 `.ovpn` 与私钥只允许 Administrators 和 `SYSTEM` 读取。普通客户端只
+能通过 Named Pipe 请求状态和操作，读取不到私钥。导入成功后，文件方式会提示
+删除源 `.ezlan`。
 
 ## 6. Windows 客户端
 
-### 6.1 复用官方 OpenVPN
+### 6.1 最小进程划分
 
-首版锁定一个经过测试的 OpenVPN Community Windows x64 版本，并明确安装
-TAP-Windows6。官方组件负责：
+首版分发锁定 OpenVPN Community 2.6.21 Windows x64，并明确安装 TAP-Windows6，
+但不分发 OpenVPN GUI。升级版本前重新验证 TAP、重连、MTU 和卸载。
 
-- TAP 驱动；
-- 特权 OpenVPN 进程；
-- 托盘状态；
-- 连接和断开；
-- keepalive 与基础重连；
-- 日志。
+`ezgamelan-service.exe` 作为 Windows Service 运行，负责：
 
-`ezgamelan-join.exe` 只负责：
+- 领取、校验服务端返回的 `.ezlan` 并原子保存唯一活动配置；
+- 启动、停止并等待一个受控的 `openvpn.exe`；
+- OpenVPN 异常退出时进行有上限的重启；
+- 检查 TAP 虚拟 IP，返回连接状态；
+- 保存有界、脱敏日志。
 
-- 处理 `ezgamelan://` 和 `.ezlan` 文件关联；
-- 下载、校验和保存配置；
-- 检查默认虚拟网段是否与本机接口/路由冲突；
-- 调用官方 OpenVPN GUI 支持的连接入口；
-- 等待虚拟 IP 出现并把结果显示给玩家。
+`ezgamelan-client.exe` 以普通用户运行，只提供：
 
-如果官方 GUI 的自动连接接口在实测中不稳定，首版退回为“配置已经导入，请在
-托盘点击连接”的单步提示，而不是新增自有 Service。
+- HTTPS URL、Token 两个输入框和“加入并连接”按钮；
+- 连接、断开和状态显示；
+- 关闭主窗口后保留托盘图标，托盘菜单只有打开和退出；
+- 清晰的中文错误和下一步。
+
+离线 `.ezlan` 导入复用同一个 Service 校验与安装路径，在 URL + Token 主流程
+完成真机验证后再接入文件选择按钮。
+
+客户端和 Service 使用固定版本的本机 Named Pipe JSON 协议。消息有长度上限，
+Pipe ACL 只允许本机已登录用户、Administrators 和 `SYSTEM`；每次请求由
+Service 再次校验字段。首版不做多用户会话、多配置或远程控制。
 
 ### 6.2 活动配置
 
@@ -185,7 +191,7 @@ TAP-Windows6。官方组件负责：
 
 - 新配置完整校验后再原子替换；
 - 替换前保留一份本地备份；
-- 新连接失败时允许一键恢复上一份；
+- 配置保存在 `%ProgramData%\EZGameLAN\config`；
 - 卸载时删除本机配置和私钥；
 - 本机卸载不会吊销服务器证书，设备退出时仍要由管理员执行 `revoke`。
 
@@ -196,7 +202,7 @@ TAP 保持 Windows 默认网络配置，由 Windows 防火墙和游戏自己的�
 入站流量。
 
 玩家作为主机时，如果 Windows 弹出游戏网络访问提示，应允许对应游戏。连接
-失败时加入工具提示检查该游戏的 Windows 防火墙规则并使用虚拟 IP 直连。
+失败时客户端提示检查该游戏的 Windows 防火墙规则并使用虚拟 IP 直连。
 
 ## 7. 服务端网络
 
@@ -292,9 +298,19 @@ EZGameLAN 安装脚本接管。
 
 ## 10. 实现顺序
 
-### 第一步：手工验证 OpenVPN TAP
+### 第一步：服务端闭环
 
-先用官方 OpenVPN 客户端和两台真实 Windows 电脑验证：
+实现 `init`、`invite`、`serve`、`revoke`、`list` 和 `status`，完成链接领取、
+吊销和 Nginx 精确路径代理。
+
+### 第二步：Windows 客户端骨架
+
+实现 URL + Token 输入、Named Pipe、配置生成、OpenVPN 子进程管理和虚拟 IP
+显示。界面只保留当前流程需要的控件。
+
+### 第三步：Windows 真机验证
+
+使用两台真实 Windows 电脑验证：
 
 - 两台机器互相 Ping、TCP/UDP；
 - Minecraft Java Edition 和 L4D2 虚拟 IP 直连；
@@ -303,22 +319,11 @@ EZGameLAN 安装脚本接管。
 - MTU 1400 是否稳定；
 - 10 个客户端能加入，第 11 个被拒绝。
 
-手工验证通过后再写加入服务和 Windows 加入工具。
-
-### 第二步：服务端工具
-
-实现 `init`、`invite`、`serve`、`revoke`、`list` 和 `status`，先用命令行完成
-链接领取和吊销闭环。
-
-### 第三步：Windows 加入工具
-
-实现 URI/文件导入、HTTPS 证书校验、配置生成、OpenVPN GUI 连接和虚拟 IP 显示。
-界面只需要一个进度窗口和明确错误提示。
-
 ### 第四步：打包
 
-做一个简单安装器，安装或检查官方 OpenVPN、注册 URI 与文件关联。升级和
-卸载只验证当前真实使用路径，不预建复杂更新系统。
+做一个简单安装器，安装固定版本的 OpenVPN 核心、TAP-Windows6、Service 和
+客户端，并注册 URI。分发目录携带经签名和 SHA-256 校验的官方 OpenVPN MSI，
+只选择核心与 TAP-Windows6 组件。升级和卸载只验证当前真实使用路径。
 
 ## 11. 首版完成标准
 
@@ -348,3 +353,10 @@ EZGameLAN 安装脚本接管。
 - 通用事务、工作流或插件框架。
 
 出现真实需求时再更新本文档，而不是提前保留实现路径。
+
+## 13. 自有依赖
+
+`golang.org/x/sys/windows` 用于 Windows Service、Named Pipe ACL 和 Win32
+界面。Go 标准库没有覆盖这些 API；该依赖只编译进两个可执行文件，不增加常驻
+进程，也不引入动态运行时。版本锁定在 `go.mod` 和 `go.sum`。若后续 Go 标准库
+覆盖所需能力，可逐项替换并移除。

@@ -21,15 +21,75 @@ sudo ./ezlanctl status
 `--file PATH` 生成离线 `.ezlan`。公网 HTTPS 由已有 Nginx 提供，Go 加入服务
 只监听 `127.0.0.1:21112`。
 
-Windows 端计划复用官方 OpenVPN Community、OpenVPN GUI 和 TAP-Windows6，
-项目仅提供按需运行的加入工具；该工具尚在后续实现范围。
+Windows 端使用自己的简易客户端和后台 Service，不依赖 OpenVPN GUI：
+
+- `ezgamelan-client.exe` 是普通用户托盘界面，只显示 URL、Token、连接、断开和
+  状态；
+- `ezgamelan-service.exe` 是唯一的自有特权进程；
+- 客户端与 Service 使用受限、版本化、定长上限的本机 Named Pipe；
+- Service 通过系统证书库访问 HTTPS，在请求体中提交一次性 Token；
+- 领取到的 `.ezlan` 经过严格校验后才生成固定的 `ezgamelan.ovpn`；
+- 活动配置保存在 `%ProgramData%\EZGameLAN\config`，仅 Administrators 和
+  `SYSTEM` 可读；
+- Service 直接启动一个 `openvpn.exe`，检查虚拟 IP，并对异常退出做有上限的
+  重试。
+
+Windows x64 构建：
+
+```powershell
+$env:CGO_ENABLED = "0"
+$env:GOOS = "windows"
+$env:GOARCH = "amd64"
+
+New-Item -ItemType Directory -Force dist | Out-Null
+go build -trimpath -o dist/ezgamelan-service.exe ./cmd/ezgamelan-service
+go build -trimpath -ldflags "-H=windowsgui" `
+  -o dist/ezgamelan-client.exe ./cmd/ezgamelan-client
+```
+
+开发中的目录布局：
+
+```text
+EZGameLAN/
+├── ezgamelan-client.exe
+├── ezgamelan-service.exe
+├── openvpn.exe
+└── OpenVPN 运行所需的同目录 DLL
+```
+
+TAP-Windows6 驱动需要在安装阶段一次性安装。Service 启动后，玩家只运行
+`ezgamelan-client.exe`，输入管理员给出的 HTTPS URL 和 Token，然后点击
+“加入并连接”。
+
+当前 Windows 代码已经完成 URL + Token 领取、严格配置生成、Named Pipe、
+Service 生命周期和原生 Win32 界面。发布安装包前还需在 Windows 10/11 真机上
+完成 TAP 安装、Service 安装/卸载、签名和游戏联机验证。
+
+生成供朋友双击安装的分发目录时，在 Windows 开发机上下载并核对固定版本的
+OpenVPN Community x64 MSI，然后执行：
+
+```powershell
+.\packaging\windows\build-release.ps1 `
+  -OpenVPNMSI PATH\OpenVPN-2.6.21-I001-amd64.msi
+```
+
+脚本交叉构建两个自有程序，把 MSI 的 SHA-256、来源和许可证写入分发目录。
+朋友解压后双击 `install.cmd` 即可；安装阶段只选择 OpenVPN 核心和
+TAP-Windows6，不选择其 GUI。安装脚本注册 EZGameLAN Service、开始菜单入口和
+`ezgamelan://` 协议，卸载入口出现在 Windows“已安装的应用”中。
 
 开发检查：
 
-```text
+```bash
 gofmt -w ./cmd ./internal
 go test ./...
 go vet ./...
+
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
+  go build -trimpath -o /tmp/ezgamelan-service.exe ./cmd/ezgamelan-service
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
+  go build -trimpath -ldflags '-H=windowsgui' \
+  -o /tmp/ezgamelan-client.exe ./cmd/ezgamelan-client
 ```
 
 Linux 服务器部署：

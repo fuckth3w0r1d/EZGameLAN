@@ -136,7 +136,7 @@ func (c Config) Validate() error {
 	if c.OpenVPNPort == 0 {
 		return errors.New("openvpn_port must be in range 1..65535")
 	}
-	if err := validateEnrollURL(c.EnrollURL); err != nil {
+	if err := ValidateEnrollURL(c.EnrollURL); err != nil {
 		return fmt.Errorf("enroll_url: %w", err)
 	}
 	listenHost, _, err := net.SplitHostPort(c.EnrollListen)
@@ -195,7 +195,9 @@ func validateHost(host string) error {
 	return nil
 }
 
-func validateEnrollURL(raw string) error {
+// ValidateEnrollURL checks the single public enrollment endpoint accepted by
+// both the server configuration and the Windows join tool.
+func ValidateEnrollURL(raw string) error {
 	parsed, err := url.Parse(raw)
 	if err != nil {
 		return err
