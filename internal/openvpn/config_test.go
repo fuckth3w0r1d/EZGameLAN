@@ -27,6 +27,8 @@ func TestServerConfigUsesPureTAP(t *testing.T) {
 		"max-clients 10\n",
 		"ifconfig-pool 10.86.0.10 10.86.0.19 255.255.255.0\n",
 		"port 21111\n",
+		"dh none\n",
+		"cipher AES-256-GCM\n",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("config missing %q:\n%s", want, got)

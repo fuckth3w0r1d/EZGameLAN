@@ -60,11 +60,7 @@ fi
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 install -m 0755 "$binary" /usr/local/bin/ezlanctl
 
-if [[ ! -e /etc/ezgamelan/config.json ]]; then
-    /usr/local/bin/ezlanctl init --host "$host"
-else
-    echo "Keeping existing /etc/ezgamelan configuration."
-fi
+/usr/local/bin/ezlanctl init --host "$host"
 
 install -m 0644 \
     "$script_dir/ezgamelan-openvpn.service" \

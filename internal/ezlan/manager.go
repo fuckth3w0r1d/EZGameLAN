@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"time"
 
@@ -38,8 +37,12 @@ type InviteResult struct {
 func Initialize(ctx context.Context, configPath string, requested config.Config) error {
 	cfg := requested
 	if existing, err := config.Load(configPath); err == nil {
-		if !reflect.DeepEqual(existing, requested) {
-			return errors.New("existing configuration differs from requested init options")
+		if existing.PublicHost != requested.PublicHost {
+			return fmt.Errorf(
+				"existing public host %q differs from requested host %q",
+				existing.PublicHost,
+				requested.PublicHost,
+			)
 		}
 		cfg = existing
 	} else if !errors.Is(rootCause(err), os.ErrNotExist) {
@@ -219,7 +222,7 @@ func ensureExactFile(path string, data []byte, mode os.FileMode) error {
 	existing, err := os.ReadFile(path)
 	if err == nil {
 		if strings.TrimSpace(string(existing)) != strings.TrimSpace(string(data)) {
-			return errors.New("existing file differs from generated content")
+			return atomicfile.Replace(path, data, mode)
 		}
 		return nil
 	}
