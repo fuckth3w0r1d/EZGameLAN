@@ -291,10 +291,16 @@ ezlanctl admin-stdio
 
 ### 8.1 管理界面
 
-管理员使用单独分发的 `EZGameLAN-Admin.exe`。程序启动后只监听
-`127.0.0.1` 的随机端口，生成随机会话路径并打开系统浏览器。HTML、CSS 和
-JavaScript 直接嵌入 Go 可执行文件，不使用 Electron、Node.js 或外部 Web
-资源。关闭页面后，进程在短暂空闲超时后自行退出。
+管理员使用单独分发的 `EZGameLAN-Admin.exe`。程序不预设具体 SSH 主机。每次
+启动先显示一个原生小窗口，要求输入 SSH 配置别名或 `USER@HOST`；连接目标经过
+校验后，程序先执行一次 `snapshot` 请求确认 SSH、sudoers 和管理协议均可用。
+连接成功才监听 `127.0.0.1` 的随机端口、生成随机会话路径并打开系统浏览器。
+最近一次验证成功的 SSH 目标保存在当前用户配置目录，下次启动时预填，连接失败
+可直接修改后重试。
+
+HTML、CSS 和 JavaScript 直接嵌入 Go 可执行文件，不使用 Electron、Node.js 或
+外部 Web 资源。WebUI 绑定启动时已验证的单一 SSH 目标，页面只显示当前服务器，
+不再接收或切换 SSH 主机参数。关闭页面后，进程在短暂空闲超时后自行退出。
 
 管理界面提供当前实际需要的功能：
 
@@ -306,8 +312,8 @@ JavaScript 直接嵌入 Go 可执行文件，不使用 Electron、Node.js 或外
 - 只重启 EZGameLAN 的 OpenVPN 或加入服务；
 - 查看并导出有界、脱敏的最近诊断信息。
 
-管理员在界面中填写 SSH 配置别名，例如 `s0`。程序使用系统 `ssh` 客户端和
-用户已有的 SSH 配置、密钥或 agent，每个操作执行固定参数的命令：
+管理员在启动窗口填写 SSH 配置别名或 `USER@HOST`。程序使用系统 `ssh` 客户端
+和用户已有的 SSH 配置、密钥或 agent，每个操作执行固定参数的命令：
 
 ```text
 ssh -T -o BatchMode=yes HOST_ALIAS sudo -n /usr/local/bin/ezlanctl admin-stdio
@@ -331,7 +337,9 @@ WebUI、管理监听端口、账号系统或数据库，已有 Nginx 静态网�
 
 本机 WebUI 绑定回环地址，并同时校验随机会话路径、`Host` 和 `Origin`；响应
 使用禁止缓存和限制脚本来源的头部。加入链接只显示在当前页面，不写入日志和
-浏览器持久存储。SSH 失败时提示管理员先在终端完成主机指纹确认和密钥登录。
+浏览器持久存储。保存的 SSH 目标只含别名或主机名，不含私钥、口令和 Token。
+SSH 失败时在启动窗口显示原因，提示管理员先在终端完成主机指纹确认和密钥
+登录。
 
 ### 8.2 扩展边界
 
@@ -407,8 +415,10 @@ CA 私钥只允许管理员命令读取；加入服务只能读取待领取目�
 做一个简单安装器，安装固定版本的 OpenVPN 核心、TAP-Windows6、Service 和
 客户端，并注册 URI。最终只分发一个 `EZGameLAN-Setup.exe`：安装器内嵌经过
 固定 SHA-256 和 Authenticode 签名校验的官方 OpenVPN MSI，只选择核心与
-TAP-Windows6 组件。玩家双击 EXE 并确认一次 UAC，安装细节和内部脚本不展示。
-升级和卸载只验证当前真实使用路径。
+TAP-Windows6 组件。玩家双击 EXE 并确认一次 UAC；随后显示原生阶段进度条和
+当前步骤，包括校验安装包、安装 OpenVPN/TAP、复制程序、配置 Service 和启动
+客户端。PowerShell 安装脚本只通过受限临时进度文件报告固定阶段与百分比，不向
+界面传递任意文本。升级和卸载只验证当前真实使用路径。
 
 ### 第五步：轻量管理端
 

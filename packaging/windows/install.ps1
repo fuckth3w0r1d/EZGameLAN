@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [switch]$Quiet
+    [switch]$Quiet,
+    [string]$ProgressFile = ""
 )
 
 Set-StrictMode -Version Latest
@@ -9,12 +10,62 @@ $ErrorActionPreference = "Stop"
 $OutputEncoding = [Console]::OutputEncoding
 
 $serviceName = "EZGameLAN"
-$productVersion = "0.1.2"
+$productVersion = "0.1.3"
 $installDir = Join-Path $env:ProgramFiles "EZGameLAN"
 $dataDir = Join-Path $env:ProgramData "EZGameLAN"
 $installerDir = Join-Path $dataDir "installer"
 $managedMarker = Join-Path $installerDir "openvpn-installed-by-ezgamelan"
 $cachedOpenVPNMSI = Join-Path $installerDir "openvpn.msi"
+$script:progressPath = ""
+$allowedProgressStages = @(
+    "elevation"
+    "validate"
+    "verify"
+    "stop_existing"
+    "install_openvpn"
+    "copy_files"
+    "configure"
+    "start_service"
+    "complete"
+)
+
+if (-not [string]::IsNullOrWhiteSpace($ProgressFile)) {
+    $scriptRootFull = [IO.Path]::GetFullPath($PSScriptRoot)
+    $candidate = [IO.Path]::GetFullPath($ProgressFile)
+    $candidateDirectory = [IO.Path]::GetDirectoryName($candidate)
+    if (-not [string]::Equals(
+        $candidateDirectory,
+        $scriptRootFull,
+        [StringComparison]::OrdinalIgnoreCase
+    )) {
+        throw "安装进度文件必须位于安装临时目录。"
+    }
+    $progressItem = Get-Item -LiteralPath $candidate -ErrorAction Stop
+    if ($progressItem.PSIsContainer `
+        -or ($progressItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        throw "安装进度文件类型异常。"
+    }
+    $script:progressPath = $candidate
+}
+
+function Set-InstallStage {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Stage
+    )
+
+    if ([string]::IsNullOrEmpty($script:progressPath)) {
+        return
+    }
+    if ($allowedProgressStages -notcontains $Stage) {
+        throw "安装进度阶段异常。"
+    }
+    [IO.File]::AppendAllText(
+        $script:progressPath,
+        "$Stage`n",
+        [Text.UTF8Encoding]::new($false)
+    )
+}
 
 function Test-Administrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -71,6 +122,7 @@ if (-not [Environment]::Is64BitOperatingSystem) {
 }
 
 if (-not (Test-Administrator)) {
+    Set-InstallStage -Stage "elevation"
     $arguments = @(
         "-NoLogo"
         "-NoProfile"
@@ -79,6 +131,12 @@ if (-not (Test-Administrator)) {
         "-File"
         "`"$PSCommandPath`""
     )
+    if (-not [string]::IsNullOrEmpty($script:progressPath)) {
+        $arguments += @(
+            "-ProgressFile"
+            "`"$script:progressPath`""
+        )
+    }
     if ($Quiet) {
         $arguments += "-Quiet"
     }
@@ -96,6 +154,8 @@ if (-not (Test-Administrator)) {
     exit $process.ExitCode
 }
 
+Set-InstallStage -Stage "validate"
+
 $payloadDir = Join-Path $PSScriptRoot "payload"
 $clientSource = Join-Path $payloadDir "ezgamelan-client.exe"
 $serviceSource = Join-Path $payloadDir "ezgamelan-service.exe"
@@ -108,6 +168,8 @@ foreach ($path in @($clientSource, $serviceSource, $uninstallSource, $hashFile))
         throw "安装包缺少文件：$path"
     }
 }
+
+Set-InstallStage -Stage "verify"
 
 $msiFiles = @(Get-ChildItem -LiteralPath $thirdPartyDir `
     -Filter "OpenVPN-*-amd64.msi" -File)
@@ -140,9 +202,11 @@ $openVPNExecutable = Join-Path $env:ProgramFiles "OpenVPN\bin\openvpn.exe"
 $managedOpenVPN = (Test-Path -LiteralPath $managedMarker -PathType Leaf) `
     -or -not (Test-Path -LiteralPath $openVPNExecutable -PathType Leaf)
 
+Set-InstallStage -Stage "stop_existing"
 Stop-EZGameLANService
 Stop-EZGameLANClient
 
+Set-InstallStage -Stage "install_openvpn"
 Invoke-Checked -FilePath "msiexec.exe" -ArgumentList @(
     "/i"
     "`"$openVPNMSI`""
@@ -163,11 +227,13 @@ if ($managedOpenVPN) {
 $clientPath = Join-Path $installDir "ezgamelan-client.exe"
 $servicePath = Join-Path $installDir "ezgamelan-service.exe"
 $uninstallPath = Join-Path $installDir "uninstall.ps1"
+Set-InstallStage -Stage "copy_files"
 Copy-Item -LiteralPath $clientSource -Destination $clientPath -Force
 Copy-Item -LiteralPath $serviceSource -Destination $servicePath -Force
 Copy-Item -LiteralPath $uninstallSource -Destination $uninstallPath -Force
 
 $existingService = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+Set-InstallStage -Stage "configure"
 if ($null -eq $existingService) {
     Invoke-Checked -FilePath "sc.exe" -ArgumentList @(
         "create"
@@ -232,4 +298,6 @@ New-ItemProperty -Path $uninstallKey -Name "NoModify" `
 New-ItemProperty -Path $uninstallKey -Name "NoRepair" `
     -Value 1 -PropertyType DWord -Force | Out-Null
 
+Set-InstallStage -Stage "start_service"
 Start-Service -Name $serviceName
+Set-InstallStage -Stage "complete"

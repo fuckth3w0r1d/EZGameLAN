@@ -14,8 +14,7 @@ const statusNames = {
 async function bootstrap() {
   const response = await fetch(base + "api/config", {cache: "no-store"});
   const config = await response.json();
-  const saved = localStorage.getItem("ezgamelan-admin-server");
-  $("server").value = saved || config.default_server;
+  $("server-target").textContent = config.server;
   bindEvents();
   await refresh();
   setInterval(() => {
@@ -25,9 +24,6 @@ async function bootstrap() {
 
 function bindEvents() {
   $("refresh").addEventListener("click", () => refresh());
-  $("server").addEventListener("change", () => {
-    localStorage.setItem("ezgamelan-admin-server", $("server").value.trim());
-  });
   $("new-invite").addEventListener("click", () => {
     $("invite-panel").classList.remove("hidden");
     $("device-name").focus();
@@ -57,13 +53,10 @@ function bindEvents() {
 }
 
 async function call(action, name = "") {
-  const server = $("server").value.trim();
-  localStorage.setItem("ezgamelan-admin-server", server);
   const response = await fetch(base + "api/action", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify({
-      server,
       request: {
         protocol_version: 1,
         action,

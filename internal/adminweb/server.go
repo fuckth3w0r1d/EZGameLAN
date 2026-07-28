@@ -34,7 +34,7 @@ var assets embed.FS
 
 type Server struct {
 	remote       Remote
-	defaultAlias string
+	serverTarget string
 	listener     net.Listener
 	http         *http.Server
 	basePath     string
@@ -49,20 +49,19 @@ type Server struct {
 }
 
 type localActionRequest struct {
-	Server  string        `json:"server"`
 	Request admin.Request `json:"request"`
 }
 
 type localConfig struct {
-	DefaultServer string `json:"default_server"`
+	Server string `json:"server"`
 }
 
-func Start(ctx context.Context, remote Remote, defaultAlias string) (*Server, error) {
+func Start(ctx context.Context, remote Remote, serverTarget string) (*Server, error) {
 	if remote == nil {
 		return nil, errors.New("SSH 调用器为空")
 	}
-	if err := ValidateServerAlias(defaultAlias); err != nil {
-		return nil, fmt.Errorf("默认 SSH 别名: %w", err)
+	if err := ValidateServerAlias(serverTarget); err != nil {
+		return nil, fmt.Errorf("SSH 目标: %w", err)
 	}
 	session, err := randomSession()
 	if err != nil {
@@ -81,7 +80,7 @@ func Start(ctx context.Context, remote Remote, defaultAlias string) (*Server, er
 	basePath := "/" + session + "/"
 	server := &Server{
 		remote:       remote,
-		defaultAlias: defaultAlias,
+		serverTarget: serverTarget,
 		listener:     listener,
 		basePath:     basePath,
 		origin:       "http://" + address,
@@ -141,7 +140,7 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	case request.Method == http.MethodGet && relative == "style.css":
 		s.serveAsset(writer, request, "style.css", "text/css; charset=utf-8")
 	case request.Method == http.MethodGet && relative == "api/config":
-		s.writeJSON(writer, http.StatusOK, localConfig{DefaultServer: s.defaultAlias})
+		s.writeJSON(writer, http.StatusOK, localConfig{Server: s.serverTarget})
 	case request.Method == http.MethodPost && relative == "api/action":
 		s.handleAction(writer, request)
 	case request.Method == http.MethodPost && relative == "api/close":
@@ -204,20 +203,9 @@ func (s *Server) handleAction(writer http.ResponseWriter, request *http.Request)
 		http.Error(writer, "invalid request", http.StatusBadRequest)
 		return
 	}
-	if err := ValidateServerAlias(input.Server); err != nil {
-		s.writeJSON(writer, http.StatusBadRequest, admin.Response{
-			ProtocolVersion: admin.ProtocolVersion,
-			OK:              false,
-			Error: &admin.ErrorDetail{
-				Code:    "E_CONFIG_SSH",
-				Message: err.Error(),
-			},
-		})
-		return
-	}
 	ctx, cancel := context.WithTimeout(request.Context(), actionTimeout)
 	defer cancel()
-	response, err := s.remote.Call(ctx, input.Server, input.Request)
+	response, err := s.remote.Call(ctx, s.serverTarget, input.Request)
 	if err != nil {
 		response = admin.Response{
 			ProtocolVersion: admin.ProtocolVersion,

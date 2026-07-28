@@ -79,12 +79,24 @@ h2 { font-size: 20px; letter-spacing: -.2px; }
 }
 
 .server-control { width: 330px; }
-.server-control label, .invite-form label {
+.server-control > span, .invite-form label {
   display: block;
   margin-bottom: 6px;
   color: var(--muted);
   font-size: 12px;
   font-weight: 600;
+}
+.server-control strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.connected-server {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
 }
 .server-control input, .invite-form input { min-width: 0; flex: 1; }
 .inline { display: flex; gap: 8px; }

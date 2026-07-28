@@ -135,6 +135,18 @@ func TestBuiltArtifact(t *testing.T) {
 		if !bytes.HasPrefix(data, []byte{0xef, 0xbb, 0xbf}) {
 			t.Errorf("%s lacks the UTF-8 BOM required by Windows PowerShell 5.1", name)
 		}
+		if name == "install.ps1" {
+			for _, marker := range [][]byte{
+				[]byte(`$productVersion = "0.1.3"`),
+				[]byte(`[string]$ProgressFile`),
+				[]byte(`Set-InstallStage -Stage "install_openvpn"`),
+				[]byte(`Set-InstallStage -Stage "start_service"`),
+			} {
+				if !bytes.Contains(data, marker) {
+					t.Errorf("install.ps1 lacks progress marker %q", marker)
+				}
+			}
+		}
 	}
 }
 

@@ -65,9 +65,20 @@ func TestLocalServerUsesSecretPathAndChecksOrigin(t *testing.T) {
 	if csp := page.Header.Get("Content-Security-Policy"); !strings.Contains(csp, "default-src 'none'") {
 		t.Fatalf("CSP = %q", csp)
 	}
+	configResponse, err := client.Get(server.URL() + "api/config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer configResponse.Body.Close()
+	var config localConfig
+	if err := json.NewDecoder(configResponse.Body).Decode(&config); err != nil {
+		t.Fatal(err)
+	}
+	if config.Server != "s0" {
+		t.Fatalf("server config = %#v", config)
+	}
 
 	payload, err := json.Marshal(localActionRequest{
-		Server: "s0",
 		Request: admin.Request{
 			ProtocolVersion: admin.ProtocolVersion,
 			Action:          admin.ActionSnapshot,
@@ -103,6 +114,28 @@ func TestLocalServerUsesSecretPathAndChecksOrigin(t *testing.T) {
 	if !got.OK || remote.server != "s0" ||
 		remote.request.Action != admin.ActionSnapshot {
 		t.Fatalf("response=%#v remote=%#v", got, remote)
+	}
+
+	overridePayload := []byte(
+		`{"server":"other","request":{"protocol_version":1,"action":"snapshot"}}`,
+	)
+	overrideRequest, err := http.NewRequest(
+		http.MethodPost,
+		actionURL,
+		bytes.NewReader(overridePayload),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	overrideRequest.Header.Set("Content-Type", "application/json")
+	overrideRequest.Header.Set("Origin", parsed.Scheme+"://"+parsed.Host)
+	overrideResponse, err := client.Do(overrideRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer overrideResponse.Body.Close()
+	if overrideResponse.StatusCode != http.StatusBadRequest {
+		t.Fatalf("server override status = %d", overrideResponse.StatusCode)
 	}
 
 	badRequest, err := http.NewRequest(

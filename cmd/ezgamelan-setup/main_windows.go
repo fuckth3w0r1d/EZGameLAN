@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/r3t2/ezgamelan/internal/setup"
 	"golang.org/x/sys/windows"
@@ -34,7 +35,7 @@ func main() {
 	if !confirmed {
 		return
 	}
-	if err := install(); err != nil {
+	if err := runInstallProgress(); err != nil {
 		showMessage(
 			"EZGameLAN 安装失败",
 			"安装过程出现问题：\n\n"+shortError(err),
@@ -61,7 +62,8 @@ func confirmInstall() (bool, error) {
 	return result == resultOK, nil
 }
 
-func install() error {
+func install(report func(setup.Progress)) error {
+	report(setup.ProgressForStage("prepare"))
 	executable, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("定位安装程序: %w", err)
@@ -71,6 +73,7 @@ func install() error {
 		return fmt.Errorf("创建临时目录: %w", err)
 	}
 	defer os.RemoveAll(temporary)
+	report(setup.ProgressForStage("extract"))
 	if err := setup.Extract(executable, temporary); err != nil {
 		return fmt.Errorf("校验安装包: %w", err)
 	}
@@ -88,12 +91,26 @@ func install() error {
 	if info, err := os.Lstat(powerShell); err != nil || !info.Mode().IsRegular() {
 		return fmt.Errorf("Windows PowerShell 路径异常")
 	}
+	progressPath := filepath.Join(temporary, "install-progress.txt")
+	progressFile, err := os.OpenFile(
+		progressPath,
+		os.O_CREATE|os.O_EXCL|os.O_WRONLY,
+		0o600,
+	)
+	if err != nil {
+		return fmt.Errorf("创建安装进度文件: %w", err)
+	}
+	if err := progressFile.Close(); err != nil {
+		return fmt.Errorf("关闭安装进度文件: %w", err)
+	}
+	report(setup.ProgressForStage("elevation"))
 	command := exec.Command(
 		powerShell,
 		"-NoLogo",
 		"-NoProfile",
 		"-ExecutionPolicy", "Bypass",
 		"-File", filepath.Join(temporary, "install.ps1"),
+		"-ProgressFile", progressPath,
 		"-Quiet",
 	)
 	command.SysProcAttr = &syscall.SysProcAttr{
@@ -103,13 +120,42 @@ func install() error {
 	var output boundedOutput
 	command.Stdout = &output
 	command.Stderr = &output
-	if err := command.Run(); err != nil {
+	if err := command.Start(); err != nil {
+		return fmt.Errorf("启动安装进程: %w", err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- command.Wait()
+	}()
+	ticker := time.NewTicker(150 * time.Millisecond)
+	defer ticker.Stop()
+	lastStage := ""
+	var commandErr error
+waitLoop:
+	for {
+		select {
+		case commandErr = <-done:
+			break waitLoop
+		case <-ticker.C:
+			progress, err := setup.ReadProgress(progressPath)
+			if err == nil && progress.Stage != "" && progress.Stage != lastStage {
+				lastStage = progress.Stage
+				report(progress)
+			}
+		}
+	}
+	if progress, err := setup.ReadProgress(progressPath); err == nil &&
+		progress.Stage != "" && progress.Stage != lastStage {
+		report(progress)
+	}
+	if commandErr != nil {
 		detail := strings.TrimSpace(output.String())
 		if detail == "" {
-			return fmt.Errorf("安装进程退出: %w", err)
+			return fmt.Errorf("安装进程退出: %w", commandErr)
 		}
-		return fmt.Errorf("安装进程退出: %w: %s", err, detail)
+		return fmt.Errorf("安装进程退出: %w: %s", commandErr, detail)
 	}
+	report(setup.ProgressForStage("launch_client"))
 	clientPath := filepath.Join(
 		os.Getenv("ProgramFiles"),
 		"EZGameLAN",
@@ -123,6 +169,7 @@ func install() error {
 		return fmt.Errorf("启动 EZGameLAN 客户端: %w", err)
 	}
 	_ = client.Process.Release()
+	report(setup.ProgressForStage("finished"))
 	return nil
 }
 
