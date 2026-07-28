@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -19,7 +18,6 @@ import (
 	"github.com/r3t2/ezgamelan/internal/config"
 	"github.com/r3t2/ezgamelan/internal/enroll"
 	"github.com/r3t2/ezgamelan/internal/ezlan"
-	"github.com/r3t2/ezgamelan/internal/pki"
 	"github.com/r3t2/ezgamelan/internal/store"
 )
 
@@ -72,17 +70,16 @@ func runInit(configPath string, args []string) error {
 	fs.SetOutput(os.Stderr)
 	host := fs.String("host", "", "public DNS name or IPv4 address")
 	openvpnPort := fs.Uint("openvpn-port", 21111, "OpenVPN UDP port")
-	enrollPort := fs.Uint("enroll-port", 21112, "public enrollment TCP port")
-	enrollListen := fs.String("enroll-listen", ":21112", "enrollment listen address")
+	enrollURL := fs.String("enroll-url", "", "public HTTPS enrollment URL")
+	enrollListen := fs.String(
+		"enroll-listen",
+		"127.0.0.1:21112",
+		"loopback enrollment listen address",
+	)
 	virtualCIDR := fs.String("subnet", "10.86.0.0/24", "virtual IPv4 /24")
 	mtu := fs.Int("mtu", 1400, "TAP MTU")
 	stateDir := fs.String("state-dir", "/var/lib/ezgamelan", "state directory")
 	pkiDir := fs.String("pki-dir", "/etc/ezgamelan/pki", "CA and OpenVPN PKI directory")
-	enrollTLSDir := fs.String(
-		"enroll-tls-dir",
-		"/etc/ezgamelan/enroll",
-		"enrollment TLS directory",
-	)
 	openvpnPath := fs.String("openvpn", "/usr/sbin/openvpn", "OpenVPN executable")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -93,19 +90,20 @@ func runInit(configPath string, args []string) error {
 	if *host == "" {
 		return errors.New("init requires --host HOST")
 	}
-	if *openvpnPort > 65535 || *enrollPort > 65535 {
-		return errors.New("ports must be in range 1..65535")
+	if *openvpnPort > 65535 {
+		return errors.New("openvpn port must be in range 1..65535")
 	}
 
 	cfg := config.Default(*host)
 	cfg.OpenVPNPort = uint16(*openvpnPort)
-	cfg.EnrollPort = uint16(*enrollPort)
+	if *enrollURL != "" {
+		cfg.EnrollURL = *enrollURL
+	}
 	cfg.EnrollListen = *enrollListen
 	cfg.VirtualCIDR = *virtualCIDR
 	cfg.MTU = *mtu
 	cfg.StateDir = *stateDir
 	cfg.PKIDir = *pkiDir
-	cfg.EnrollTLSDir = *enrollTLSDir
 	cfg.OpenVPNPath = *openvpnPath
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -171,19 +169,13 @@ func runServe(configPath string, args []string) error {
 		WriteTimeout:      15 * time.Second,
 		IdleTimeout:       30 * time.Second,
 		MaxHeaderBytes:    8 << 10,
-		TLSConfig: &tls.Config{
-			MinVersion: tls.VersionTLS12,
-		},
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- server.ListenAndServeTLS(
-			filepath.Join(cfg.EnrollTLSDir, pki.EnrollCertFile),
-			filepath.Join(cfg.EnrollTLSDir, pki.EnrollKeyFile),
-		)
+		errCh <- server.ListenAndServe()
 	}()
 	logger.Info("enrollment service started", "listen", cfg.EnrollListen)
 	select {
@@ -262,16 +254,12 @@ func runStatus(configPath string, args []string) error {
 	for _, client := range clients {
 		counts[client.Status]++
 	}
-	pin, err := pki.EnrollmentPin(cfg.EnrollTLSDir)
-	if err != nil {
-		return fmt.Errorf("E_JOIN_STATUS: %w", err)
-	}
 	fmt.Printf(
-		"服务器：%s\nOpenVPN：%s\n加入服务：https://%s\n服务指纹：%s\n客户端：active=%s pending=%s revoked=%s\n",
+		"服务器：%s\nOpenVPN：%s\n加入服务：%s\n本机监听：%s\n客户端：active=%s pending=%s revoked=%s\n",
 		cfg.PublicHost,
 		cfg.OpenVPNEndpoint(),
-		cfg.EnrollEndpoint(),
-		pin,
+		cfg.EnrollURL,
+		cfg.EnrollListen,
 		strconv.Itoa(counts[store.StatusActive]),
 		strconv.Itoa(counts[store.StatusPending]),
 		strconv.Itoa(counts[store.StatusRevoked]),

@@ -4,16 +4,19 @@ set -euo pipefail
 usage() {
     cat <<'EOF'
 Usage:
-  sudo ./packaging/linux/install.sh --host HOST --binary PATH
+  sudo ./packaging/linux/install.sh --host HOST --binary PATH [--enroll-url URL]
 
 Options:
-  --host HOST      Public IPv4 address or DNS name used in join links.
-  --binary PATH    Locally built Linux amd64 ezlanctl binary.
+  --host HOST          Public DNS name or IPv4 address used by OpenVPN.
+  --binary PATH        Locally built Linux amd64 ezlanctl binary.
+  --enroll-url URL     Public Nginx HTTPS endpoint. Defaults to
+                       https://HOST/ezgamelan/v1/enroll.
 EOF
 }
 
 host=""
 binary=""
+enroll_url=""
 while (($# > 0)); do
     case "$1" in
         --host)
@@ -22,6 +25,10 @@ while (($# > 0)); do
             ;;
         --binary)
             binary="${2:-}"
+            shift 2
+            ;;
+        --enroll-url)
+            enroll_url="${2:-}"
             shift 2
             ;;
         -h | --help)
@@ -44,6 +51,9 @@ if [[ -z "$host" || -z "$binary" ]]; then
     usage >&2
     exit 2
 fi
+if [[ -z "$enroll_url" ]]; then
+    enroll_url="https://${host}/ezgamelan/v1/enroll"
+fi
 if [[ ! -f "$binary" || -L "$binary" ]]; then
     echo "Binary must be a regular file: $binary" >&2
     exit 1
@@ -60,7 +70,10 @@ fi
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 install -m 0755 "$binary" /usr/local/bin/ezlanctl
 
-/usr/local/bin/ezlanctl init --host "$host"
+/usr/local/bin/ezlanctl init \
+    --host "$host" \
+    --enroll-url "$enroll_url" \
+    --enroll-listen "127.0.0.1:21112"
 
 install -m 0644 \
     "$script_dir/ezgamelan-openvpn.service" \
@@ -78,7 +91,8 @@ systemctl --quiet is-active ezgamelan-enroll.service
 
 cat <<EOF
 EZGameLAN server is running.
-Open these cloud firewall ports:
+Cloud firewall:
   21111/UDP  OpenVPN data
-  21112/TCP  one-time enrollment
+  443/TCP    existing Nginx HTTPS
+The enrollment backend only listens on 127.0.0.1:21112.
 EOF

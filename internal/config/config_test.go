@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,7 +14,6 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	cfg := Default("vpn.example.test")
 	cfg.StateDir = filepath.Join(dir, "state")
 	cfg.PKIDir = filepath.Join(dir, "pki")
-	cfg.EnrollTLSDir = filepath.Join(dir, "enroll")
 	cfg.OpenVPNPath = "/test/openvpn"
 	path := filepath.Join(dir, "config.json")
 
@@ -35,7 +35,6 @@ func TestLoadRejectsUnknownField(t *testing.T) {
 	cfg := Default("127.0.0.1")
 	cfg.StateDir = filepath.Join(dir, "state")
 	cfg.PKIDir = filepath.Join(dir, "pki")
-	cfg.EnrollTLSDir = filepath.Join(dir, "enroll")
 	cfg.OpenVPNPath = "/test/openvpn"
 	path := filepath.Join(dir, "config.json")
 	if err := Save(path, cfg); err != nil {
@@ -60,5 +59,41 @@ func TestValidateRejectsNonCanonicalSubnet(t *testing.T) {
 	cfg.VirtualCIDR = "10.86.0.1/24"
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("Validate accepted non-canonical subnet")
+	}
+}
+
+func TestValidateEnrollmentBoundary(t *testing.T) {
+	t.Parallel()
+	for name, mutate := range map[string]func(*Config){
+		"plain HTTP": func(cfg *Config) {
+			cfg.EnrollURL = "http://vpn.example.test" + EnrollPath
+		},
+		"unexpected path": func(cfg *Config) {
+			cfg.EnrollURL = "https://vpn.example.test/v1/enroll"
+		},
+		"public listen": func(cfg *Config) {
+			cfg.EnrollListen = "0.0.0.0:21112"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := Default("vpn.example.test")
+			mutate(&cfg)
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("Validate accepted unsafe enrollment configuration")
+			}
+		})
+	}
+}
+
+func TestLoadReportsLegacyVersion(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"format_version":1,"enroll_port":21112}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	var versionErr *VersionError
+	if !errors.As(err, &versionErr) || versionErr.Got != 1 {
+		t.Fatalf("Load error = %v", err)
 	}
 }

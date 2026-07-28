@@ -21,8 +21,9 @@ LAN 自动发现尽量支持，但虚拟 IP 直连是可靠路径。首版不追
 
 ```text
 Linux 服务器
-├── OpenVPN Server                    UDP/21111
-├── ezlanctl serve（加入配置下载）    TCP/21112
+├── OpenVPN Server                         UDP/21111
+├── Nginx（复用已有 HTTPS 站点）            TCP/443
+├── ezlanctl serve（加入配置下载）          127.0.0.1:21112
 └── ezlanctl（init/invite/revoke）
 
 Windows 玩家电脑
@@ -39,7 +40,7 @@ Windows 玩家电脑
 - 客户端复用官方 OpenVPN GUI、Service 和重连能力；
 - 项目只写一个很小的 Windows 加入工具，省去自有托盘 UI、Windows Service、
   Named Pipe、网络状态机和防火墙管理器；
-- 服务端只有 OpenVPN 和一个很小的加入服务常驻；
+- 服务端只有 OpenVPN、已有 Nginx 和一个很小的加入服务常驻；
 - 加入服务与管理 CLI 使用同一个 Go 可执行文件 `ezlanctl`；
 - 状态放在文件中，不使用数据库。
 
@@ -56,7 +57,7 @@ ezlanctl invite alice
 命令输出一条加入链接：
 
 ```text
-ezgamelan://join?server=HOST:21112&pin=SERVER_PIN#TOKEN
+ezgamelan://join?url=https%3A%2F%2FHOST%2Fezgamelan%2Fv1%2Fenroll#TOKEN
 ```
 
 玩家流程：
@@ -83,10 +84,11 @@ ezlanctl invite alice --file alice.ezlan
 玩家双击 `.ezlan`，由同一个加入工具导入。链接是默认方式，文件是离线兜底，
 两条路径最终使用同一种设备配置数据。
 
-## 4. 加入链接和 Token
+## 4. 加入 URL 和 Token
 
 单独输入服务器 IP 只解决“连接哪台服务器”，还缺少客户端证书、私钥和服务端
-身份。因此首版采用“服务器地址 + 一次性 Token + 服务器公钥指纹”。
+身份。因此首版采用“HTTPS URL + 一次性 Token”。公网 TLS 直接复用已有
+Nginx 和受信任证书，玩家不必输入端口、证书指纹或更多参数。
 
 ### 4.1 生成
 
@@ -96,19 +98,22 @@ ezlanctl invite alice --file alice.ezlan
 2. 生成至少 128 位随机 Token，默认 30 分钟过期；
 3. 把待领取的 `.ezlan` 放入受限目录；
 4. 文件中只保存 Token 哈希，不保存明文 Token；
-5. 输出包含地址、公钥指纹和 Token 的加入链接。
+5. 输出包含 HTTPS 加入 URL 和 Token 的加入链接。
 
 同名有效设备默认拒绝重复生成。重新发放时先吊销旧设备，再生成新链接。
 
 ### 4.2 领取
 
-`ezgamelan-join.exe` 从链接读取服务器地址、公钥指纹和 Token，然后：
+`ezgamelan-join.exe` 从链接读取 HTTPS URL 和 Token，然后：
 
-1. 连接 `https://HOST:21112/v1/enroll`；
-2. 使用链接中的公钥指纹校验加入服务，不依赖公网域名和公共 CA；
-3. 在 POST 请求体中发送 Token，避免 Token 进入访问日志；
+1. 连接 `https://HOST/ezgamelan/v1/enroll`；
+2. 使用系统证书库正常校验 Nginx 的 HTTPS 证书；
+3. 在 POST 请求体中发送 Token，避免 Token 进入 Nginx 访问日志；
 4. 下载 `.ezlan`，完成大小和格式校验；
 5. 服务端在响应发送完成后销毁待领取文件。
+
+Nginx 只为这个精确路径增加反向代理，静态网页的 `location /` 保持原样。Go
+加入服务只提供本机 HTTP，不直接暴露公网端口，也不持有公网 TLS 私钥。
 
 Token 过期、已使用或校验失败时，管理员重新生成一条链接即可。加入服务只读取
 已经生成的待领取配置，无权读取 CA 私钥，也没有在线签发能力。
@@ -213,7 +218,8 @@ OpenVPN dev tap
 | 服务端虚拟 IP | `10.86.0.1` |
 | 客户端地址 | `10.86.0.10`～`10.86.0.19` |
 | OpenVPN | `21111/UDP` |
-| 加入服务 | `21112/TCP` |
+| 公网加入 URL | `443/TCP` 的 `/ezgamelan/v1/enroll` |
+| 本机加入服务 | `127.0.0.1:21112/TCP` |
 | TAP MTU 起始值 | `1400` |
 
 OpenVPN 分配 IP 和 MTU，项目代码只检查结果。客户端不接管默认路由、不修改
@@ -241,7 +247,7 @@ ezlanctl status
 
 职责：
 
-- `init` 创建配置、CA、服务端证书、加入服务 TLS 身份和 systemd unit；
+- `init` 创建配置、CA、服务端证书和 OpenVPN 配置；
 - `serve` 提供唯一的 `/v1/enroll` 接口；
 - `invite` 生成客户端凭据、Token 和链接或离线文件；
 - `revoke` 更新 CRL；已有连接会在重新认证时失效，需要立即断开时由管理员
@@ -261,7 +267,9 @@ CA 私钥只允许管理员命令读取；加入服务只能读取待领取目�
 证书和 CRL 使用适合个人部署的较长有限有效期，`status` 在到期前给出续签或
 刷新提示。
 
-服务器只开放 `21111/UDP` 和 `21112/TCP`，加入服务接口之外没有管理 API。
+服务器对公网开放 `21111/UDP`，并复用已有 Nginx 的 `443/TCP`。`21112/TCP`
+只绑定回环地址，加入接口之外没有管理 API。Nginx 的静态站点和已有路径不由
+EZGameLAN 安装脚本接管。
 
 ## 9. 安全边界
 
@@ -272,7 +280,8 @@ CA 私钥只允许管理员命令读取；加入服务只能读取待领取目�
 
 - 每台设备独立证书，丢失或退出时可单独吊销；
 - 禁用 `duplicate-cn`、压缩、外部脚本和插件；
-- 客户端固定校验服务端证书身份；
+- 客户端使用系统证书库校验加入 URL 的 HTTPS 身份，并固定校验 OpenVPN
+  服务端证书身份；
 - Token 随机、短期、使用后删除，服务端只保存哈希；
 - 私钥、Token 和完整加入链接不进入日志；
 - OpenVPN、TAP 驱动和安装包锁定版本与来源；
@@ -303,7 +312,7 @@ CA 私钥只允许管理员命令读取；加入服务只能读取待领取目�
 
 ### 第三步：Windows 加入工具
 
-实现 URI/文件导入、TLS 指纹校验、配置生成、OpenVPN GUI 连接和虚拟 IP 显示。
+实现 URI/文件导入、HTTPS 证书校验、配置生成、OpenVPN GUI 连接和虚拟 IP 显示。
 界面只需要一个进度窗口和明确错误提示。
 
 ### 第四步：打包

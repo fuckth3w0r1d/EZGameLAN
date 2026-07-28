@@ -67,7 +67,7 @@ func configProfile(t *testing.T, now time.Time) invite.Profile {
 	t.Helper()
 	root := t.TempDir()
 	pkiDir := filepath.Join(root, "pki")
-	if err := pki.Init(pkiDir, filepath.Join(root, "enroll"), "127.0.0.1", "ezgamelan-server", now); err != nil {
+	if err := pki.Init(pkiDir, "ezgamelan-server", now); err != nil {
 		t.Fatal(err)
 	}
 	material, err := pki.IssueClient(pkiDir, "alice", now)

@@ -64,8 +64,7 @@ func newProfile(t *testing.T, now time.Time, name string) invite.Profile {
 	t.Helper()
 	root := t.TempDir()
 	pkiDir := root + "/pki"
-	enrollDir := root + "/enroll"
-	if err := pki.Init(pkiDir, enrollDir, "127.0.0.1", "ezgamelan-server", now); err != nil {
+	if err := pki.Init(pkiDir, "ezgamelan-server", now); err != nil {
 		t.Fatalf("pki.Init: %v", err)
 	}
 	material, err := pki.IssueClient(pkiDir, name, now)

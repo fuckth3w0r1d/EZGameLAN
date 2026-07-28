@@ -36,6 +36,7 @@ type InviteResult struct {
 
 func Initialize(ctx context.Context, configPath string, requested config.Config) error {
 	cfg := requested
+	replaceLegacy := false
 	if existing, err := config.Load(configPath); err == nil {
 		if existing.PublicHost != requested.PublicHost {
 			return fmt.Errorf(
@@ -45,6 +46,18 @@ func Initialize(ctx context.Context, configPath string, requested config.Config)
 			)
 		}
 		cfg = existing
+	} else if versionErr := new(config.VersionError); errors.As(err, &versionErr) &&
+		versionErr.Got == 1 {
+		legacyData, readErr := os.ReadFile(configPath)
+		if readErr != nil {
+			return fmt.Errorf("read legacy configuration: %w", readErr)
+		}
+		backupPath := configPath + ".v1.bak"
+		if writeErr := atomicfile.Create(backupPath, legacyData, 0o600); writeErr != nil &&
+			!errors.Is(writeErr, os.ErrExist) {
+			return fmt.Errorf("back up legacy configuration: %w", writeErr)
+		}
+		replaceLegacy = true
 	} else if !errors.Is(rootCause(err), os.ErrNotExist) {
 		return err
 	}
@@ -55,7 +68,7 @@ func Initialize(ctx context.Context, configPath string, requested config.Config)
 		return err
 	}
 	now := time.Now()
-	if err := pki.Init(cfg.PKIDir, cfg.EnrollTLSDir, cfg.PublicHost, cfg.ServerName, now); err != nil {
+	if err := pki.Init(cfg.PKIDir, cfg.ServerName, now); err != nil {
 		return err
 	}
 	serverTLSKey := filepath.Join(cfg.PKIDir, "tls-crypt-v2-server.key")
@@ -74,7 +87,11 @@ func Initialize(ctx context.Context, configPath string, requested config.Config)
 	if err := ensureExactFile(serverConfigPath, []byte(serverConfig), 0o600); err != nil {
 		return fmt.Errorf("write OpenVPN server config: %w", err)
 	}
-	if _, err := os.Stat(configPath); errors.Is(err, os.ErrNotExist) {
+	if replaceLegacy {
+		if err := config.Replace(configPath, cfg); err != nil {
+			return err
+		}
+	} else if _, err := os.Stat(configPath); errors.Is(err, os.ErrNotExist) {
 		if err := config.Save(configPath, cfg); err != nil {
 			return err
 		}
@@ -176,10 +193,6 @@ func (m *Manager) Invite(
 	if err != nil {
 		return InviteResult{}, fmt.Errorf("generate invite token: %w", err)
 	}
-	pin, err := pki.EnrollmentPin(m.cfg.EnrollTLSDir)
-	if err != nil {
-		return InviteResult{}, err
-	}
 	expires := now.Add(inviteLifetime)
 	pending := store.Pending{
 		FormatVersion: 1,
@@ -191,13 +204,20 @@ func (m *Manager) Invite(
 	if err := m.store.AddPending(client, pending, now); err != nil {
 		return InviteResult{}, err
 	}
+	return InviteResult{
+		Link:      buildJoinLink(m.cfg.EnrollURL, token),
+		ExpiresAt: expires,
+	}, nil
+}
+
+func buildJoinLink(enrollURL, token string) string {
 	link := url.URL{
 		Scheme:   "ezgamelan",
 		Host:     "join",
-		RawQuery: url.Values{"server": {m.cfg.EnrollEndpoint()}, "pin": {pin}}.Encode(),
+		RawQuery: url.Values{"url": {enrollURL}}.Encode(),
 		Fragment: token,
 	}
-	return InviteResult{Link: link.String(), ExpiresAt: expires}, nil
+	return link.String()
 }
 
 func (m *Manager) Revoke(name string) error {

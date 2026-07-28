@@ -25,7 +25,8 @@
 - 单个虚拟 LAN，最多 10 台客户端；
 - 默认网段 `10.86.0.0/24`；
 - OpenVPN 使用 `21111/UDP`；
-- 加入服务使用 `21112/TCP`；
+- Nginx 复用 `443/TCP` 提供公网加入 URL；
+- 加入服务只监听 `127.0.0.1:21112/TCP`；
 - Linux 使用 systemd；
 - 服务端管理使用同一个 Go 程序 `ezlanctl`；
 - Windows 复用官方 OpenVPN GUI、官方 Service 和 TAP-Windows6；

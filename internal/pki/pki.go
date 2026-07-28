@@ -7,10 +7,8 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/pem"
 	"errors"
@@ -29,8 +27,6 @@ const (
 	CAKeyFile      = "ca.key"
 	ServerCertFile = "server.crt"
 	ServerKeyFile  = "server.key"
-	EnrollCertFile = "enroll.crt"
-	EnrollKeyFile  = "enroll.key"
 	CRLFile        = "crl.pem"
 )
 
@@ -46,19 +42,12 @@ type Revocation struct {
 	At        time.Time
 }
 
-func Init(dir, enrollDir, publicHost, serverName string, now time.Time) error {
+func Init(dir, serverName string, now time.Time) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create PKI directory: %w", err)
 	}
 	if err := os.Chmod(dir, 0o700); err != nil {
 		return fmt.Errorf("secure PKI directory: %w", err)
-	}
-
-	if err := os.MkdirAll(enrollDir, 0o700); err != nil {
-		return fmt.Errorf("create enrollment TLS directory: %w", err)
-	}
-	if err := os.Chmod(enrollDir, 0o700); err != nil {
-		return fmt.Errorf("secure enrollment TLS directory: %w", err)
 	}
 
 	caCertPath := filepath.Join(dir, CACertFile)
@@ -145,18 +134,6 @@ func Init(dir, enrollDir, publicHost, serverName string, now time.Time) error {
 		return fmt.Errorf("initialize OpenVPN server certificate: %w", err)
 	}
 
-	enrollCertPath := filepath.Join(enrollDir, EnrollCertFile)
-	enrollKeyPath := filepath.Join(enrollDir, EnrollKeyFile)
-	if err := ensureCertificatePair(
-		enrollCertPath,
-		enrollKeyPath,
-		func() ([]byte, []byte, error) {
-			return selfSignedEnrollmentCertificate(publicHost, now)
-		},
-	); err != nil {
-		return fmt.Errorf("initialize enrollment TLS certificate: %w", err)
-	}
-
 	if exists, err := regularFileExists(filepath.Join(dir, CRLFile)); err != nil {
 		return err
 	} else if !exists {
@@ -204,23 +181,6 @@ func ReadCACertificate(dir string) ([]byte, error) {
 		return nil, fmt.Errorf("read CA certificate: %w", err)
 	}
 	return data, nil
-}
-
-func EnrollmentPin(enrollDir string) (string, error) {
-	data, err := os.ReadFile(filepath.Join(enrollDir, EnrollCertFile))
-	if err != nil {
-		return "", fmt.Errorf("read enrollment certificate: %w", err)
-	}
-	block, _ := pem.Decode(data)
-	if block == nil || block.Type != "CERTIFICATE" {
-		return "", errors.New("enrollment certificate has invalid PEM format")
-	}
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		return "", fmt.Errorf("parse enrollment certificate: %w", err)
-	}
-	sum := sha256.Sum256(cert.RawSubjectPublicKeyInfo)
-	return base64.RawURLEncoding.EncodeToString(sum[:]), nil
 }
 
 func WriteCRL(dir string, revoked []Revocation, now time.Time) error {
@@ -327,39 +287,6 @@ func issueCertificate(
 	der, err := x509.CreateCertificate(rand.Reader, &template, ca, &key.PublicKey, caKey)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create certificate: %w", err)
-	}
-	keyPEM, err := marshalPrivateKey(key)
-	if err != nil {
-		return nil, nil, err
-	}
-	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), keyPEM, nil
-}
-
-func selfSignedEnrollmentCertificate(publicHost string, now time.Time) ([]byte, []byte, error) {
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return nil, nil, fmt.Errorf("generate enrollment TLS key: %w", err)
-	}
-	serial, err := randomSerial()
-	if err != nil {
-		return nil, nil, err
-	}
-	template := x509.Certificate{
-		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: "EZGameLAN Enrollment"},
-		NotBefore:    now.Add(-5 * time.Minute),
-		NotAfter:     now.AddDate(5, 0, 0),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-	}
-	if ip := net.ParseIP(publicHost); ip != nil {
-		template.IPAddresses = []net.IP{ip}
-	} else {
-		template.DNSNames = []string{publicHost}
-	}
-	der, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
-	if err != nil {
-		return nil, nil, fmt.Errorf("create enrollment TLS certificate: %w", err)
 	}
 	keyPEM, err := marshalPrivateKey(key)
 	if err != nil {
