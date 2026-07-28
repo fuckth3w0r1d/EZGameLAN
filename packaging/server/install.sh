@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
     cat <<'EOF'
 Usage:
-  sudo ./packaging/linux/install.sh --host HOST --binary PATH [options]
+  sudo ./packaging/server/install.sh --host HOST --binary PATH [options]
 
 Options:
   --host HOST          Public DNS name or IPv4 address used by OpenVPN.

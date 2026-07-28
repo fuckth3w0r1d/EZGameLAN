@@ -1,8 +1,6 @@
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)]
-    [ValidateScript({ Test-Path -LiteralPath $_ -PathType Leaf })]
-    [string]$OpenVPNMSI,
+    [string]$OpenVPNMSI = "",
 
     [string]$OutputFile = "dist\EZGameLAN-Setup.exe"
 )
@@ -32,6 +30,14 @@ $openVPNPackageName = "OpenVPN-2.6.21-I001-amd64.msi"
 $openVPNHash = "845B654EDB92CC02A05DC335693980C4F2D4A4F09689D0844309753DE2CB5471"
 $openVPNSourceURL = "https://build.openvpn.net/downloads/releases/$openVPNPackageName"
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+if ([string]::IsNullOrWhiteSpace($OpenVPNMSI)) {
+    $OpenVPNMSI = Join-Path $repositoryRoot (
+        "third_party\openvpn\$openVPNPackageName"
+    )
+}
+if (-not (Test-Path -LiteralPath $OpenVPNMSI -PathType Leaf)) {
+    throw "OpenVPN MSI 不存在：$OpenVPNMSI"
+}
 $outputPath = if ([IO.Path]::IsPathRooted($OutputFile)) {
     [IO.Path]::GetFullPath($OutputFile)
 }

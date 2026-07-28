@@ -4,15 +4,16 @@ set -euo pipefail
 openvpn_name="OpenVPN-2.6.21-I001-amd64.msi"
 openvpn_hash="845b654edb92cc02a05dc335693980c4f2d4a4f09689d0844309753de2cb5471"
 openvpn_source="https://build.openvpn.net/downloads/releases/${openvpn_name}"
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+root="$(cd "${script_dir}/../.." && pwd)"
 output="${root}/dist/EZGameLAN-Setup.exe"
+openvpn_msi="${root}/third_party/openvpn/${openvpn_name}"
 cd "${root}"
 
 usage() {
-    echo "usage: $0 --openvpn-msi PATH [--output PATH]" >&2
+    echo "usage: $0 [--openvpn-msi PATH] [--output PATH]" >&2
 }
 
-openvpn_msi=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --openvpn-msi)
@@ -32,7 +33,10 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-[[ -f "${openvpn_msi}" ]] || { usage; exit 2; }
+[[ -f "${openvpn_msi}" ]] || {
+    echo "OpenVPN MSI not found: ${openvpn_msi}" >&2
+    exit 1
+}
 [[ "$(basename "${openvpn_msi}")" == "${openvpn_name}" ]] || {
     echo "expected ${openvpn_name}" >&2
     exit 1
@@ -72,9 +76,9 @@ printf '%s *%s\n' "${openvpn_hash}" "${openvpn_name}" \
     >"${stage}/third_party/openvpn.sha256"
 # Windows PowerShell 5.1 needs the BOM to decode non-ASCII script text as UTF-8.
 printf '\357\273\277' >"${stage}/install.ps1"
-cat "${root}/packaging/windows/install.ps1" >>"${stage}/install.ps1"
+cat "${script_dir}/install.ps1" >>"${stage}/install.ps1"
 printf '\357\273\277' >"${stage}/uninstall.ps1"
-cat "${root}/packaging/windows/uninstall.ps1" >>"${stage}/uninstall.ps1"
+cat "${script_dir}/uninstall.ps1" >>"${stage}/uninstall.ps1"
 cat >"${stage}/THIRD_PARTY.txt" <<EOF
 OpenVPN Community Windows x64
 Package: ${openvpn_name}

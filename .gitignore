@@ -1,6 +1,8 @@
 # Local configuration and secrets
 /var/
 /dist/
+/AGENTS.md
+/DESIGN.md
 *.ezlan
 *.ovpn
 *.key
@@ -18,6 +20,7 @@
 *.dmp
 *.DMP
 *.msi
+!/third_party/openvpn/*.msi
 *.zip
 *.stackdump
 *.prof

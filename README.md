@@ -39,7 +39,7 @@ go build -trimpath \
 将仓库和构建产物同步到服务器后执行：
 
 ```bash
-sudo ./packaging/linux/install.sh \
+sudo ./packaging/server/install.sh \
   --host VPN_HOST \
   --enroll-url https://WEB_HOST/ezgamelan/v1/enroll \
   --admin-user SSH_USER \
@@ -49,7 +49,7 @@ sudo ./packaging/linux/install.sh \
 将以下片段包含到现有 Nginx HTTPS `server` 块：
 
 ```text
-packaging/linux/nginx-ezgamelan-location.conf
+packaging/server/nginx-ezgamelan-location.conf
 ```
 
 检查并重载 Nginx：
@@ -108,9 +108,11 @@ EZGameLAN-Setup.exe
 
 生成 Windows 安装包：
 
+仓库已包含经过固定 SHA-256 校验的 OpenVPN Community Windows x64 MSI，直接
+执行：
+
 ```bash
-./packaging/windows/build-release.sh \
-  --openvpn-msi /tmp/OpenVPN-2.6.21-I001-amd64.msi
+./packaging/client/build-release.sh
 ```
 
 ## 5. 管理端配置使用方法
@@ -118,7 +120,7 @@ EZGameLAN-Setup.exe
 构建 Windows x64 管理端：
 
 ```bash
-./packaging/windows/build-admin.sh
+./packaging/admin/build-admin.sh
 ```
 
 生成文件：
@@ -190,10 +192,11 @@ sudo -n /usr/local/bin/ezlanctl admin-stdio
 │   └── atomicfile/、logging/、setup/
 │                              原子写入、有界日志和安装包处理
 ├── packaging/
-│   ├── linux/                 systemd、Nginx 和服务端安装脚本
-│   └── windows/               Windows 构建、安装和卸载脚本
-├── AGENTS.md                  项目开发约定
-├── DESIGN.md                  架构决策和边界
+│   ├── server/                Linux 服务端部署、systemd 和 Nginx
+│   ├── client/                Windows 玩家端构建、安装和卸载
+│   └── admin/                 Windows 管理端构建
+├── third_party/
+│   └── openvpn/               固定版本 OpenVPN Windows MSI 和校验信息
 ├── go.mod、go.sum             Go 版本和锁定依赖
 └── README.md                  部署与使用说明
 ```
