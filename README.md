@@ -31,4 +31,18 @@ go test ./...
 go vet ./...
 ```
 
+Linux 服务器部署：
+
+```text
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+  go build -trimpath -o dist/ezlanctl-linux-amd64 ./cmd/ezlanctl
+
+sudo ./packaging/linux/install.sh \
+  --host HOST \
+  --binary ./dist/ezlanctl-linux-amd64
+```
+
+安装器保留已经存在的 CA 和配置，安装并启动 OpenVPN 与一次性加入服务。
+服务器或云防火墙需要开放 `21111/UDP` 和 `21112/TCP`。
+
 架构和开发约束分别见 [DESIGN.md](DESIGN.md) 与 [AGENTS.md](AGENTS.md)。

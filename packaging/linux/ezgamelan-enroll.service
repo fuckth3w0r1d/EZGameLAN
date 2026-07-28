@@ -1,0 +1,30 @@
+[Unit]
+Description=EZGameLAN one-time enrollment service
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/ezgamelan/config.json
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/ezlanctl serve
+Restart=on-failure
+RestartSec=3s
+TimeoutStopSec=15s
+UMask=0077
+
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ReadOnlyPaths=/etc/ezgamelan/config.json /etc/ezgamelan/enroll
+ReadWritePaths=/var/lib/ezgamelan
+InaccessiblePaths=/etc/ezgamelan/pki
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target
