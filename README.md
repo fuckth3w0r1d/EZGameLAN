@@ -34,7 +34,7 @@ Windows 端使用自己的简易客户端和后台 Service，不依赖 OpenVPN G
 - Service 直接启动一个 `openvpn.exe`，检查虚拟 IP，并对异常退出做有上限的
   重试。
 
-Windows x64 构建：
+Windows x64 开发构建：
 
 ```powershell
 $env:CGO_ENABLED = "0"
@@ -47,16 +47,6 @@ go build -trimpath -ldflags "-H=windowsgui" `
   -o dist/ezgamelan-client.exe ./cmd/ezgamelan-client
 ```
 
-开发中的目录布局：
-
-```text
-EZGameLAN/
-├── ezgamelan-client.exe
-├── ezgamelan-service.exe
-├── openvpn.exe
-└── OpenVPN 运行所需的同目录 DLL
-```
-
 TAP-Windows6 驱动需要在安装阶段一次性安装。Service 启动后，玩家只运行
 `ezgamelan-client.exe`，输入管理员给出的 HTTPS URL 和 Token，然后点击
 “加入并连接”。
@@ -65,17 +55,27 @@ TAP-Windows6 驱动需要在安装阶段一次性安装。Service 启动后，�
 Service 生命周期和原生 Win32 界面。发布安装包前还需在 Windows 10/11 真机上
 完成 TAP 安装、Service 安装/卸载、签名和游戏联机验证。
 
-生成供朋友双击安装的分发目录时，在 Windows 开发机上下载并核对固定版本的
-OpenVPN Community x64 MSI，然后执行：
+最终分发物是单个 `EZGameLAN-Setup.exe`。玩家只需双击这个文件并确认一次
+UAC，不接触 PowerShell 脚本、MSI 或内部文件。
+
+在 Linux 开发机生成安装包：
+
+```bash
+./packaging/windows/build-release.sh \
+  --openvpn-msi /tmp/OpenVPN-2.6.21-I001-amd64.msi
+```
+
+也可在 Windows 开发机生成：
 
 ```powershell
 .\packaging\windows\build-release.ps1 `
   -OpenVPNMSI PATH\OpenVPN-2.6.21-I001-amd64.msi
 ```
 
-脚本交叉构建两个自有程序，把 MSI 的 SHA-256、来源和许可证写入分发目录。
-朋友解压后双击 `install.cmd` 即可；安装阶段只选择 OpenVPN 核心和
-TAP-Windows6，不选择其 GUI。安装脚本注册 EZGameLAN Service、开始菜单入口和
+构建过程交叉编译客户端、Service 和安装启动器，将固定 OpenVPN MSI 以及来源、
+许可证和 SHA-256 封装进一个 EXE。启动器先校验自身载荷；安装阶段再次校验
+OpenVPN MSI 的固定 SHA-256 和 Authenticode 签名，只选择 OpenVPN 核心与
+TAP-Windows6。安装器同时注册 EZGameLAN Service、开始菜单入口和
 `ezgamelan://` 协议，卸载入口出现在 Windows“已安装的应用”中。
 
 开发检查：

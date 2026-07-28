@@ -1,5 +1,7 @@
 [CmdletBinding()]
-param()
+param(
+    [switch]$Quiet
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
@@ -72,8 +74,20 @@ if (-not (Test-Administrator)) {
         "-ExecutionPolicy", "Bypass",
         "-File", "`"$PSCommandPath`""
     )
-    $process = Start-Process -FilePath "powershell.exe" `
-        -ArgumentList $arguments -Verb RunAs -Wait -PassThru
+    if ($Quiet) {
+        $arguments += "-Quiet"
+    }
+    $startParameters = @{
+        FilePath = "powershell.exe"
+        ArgumentList = $arguments
+        Verb = "RunAs"
+        Wait = $true
+        PassThru = $true
+    }
+    if ($Quiet) {
+        $startParameters["WindowStyle"] = "Hidden"
+    }
+    $process = Start-Process @startParameters
     exit $process.ExitCode
 }
 
@@ -214,4 +228,3 @@ New-ItemProperty -Path $uninstallKey -Name "NoRepair" `
     -Value 1 -PropertyType DWord -Force | Out-Null
 
 Start-Service -Name $serviceName
-Start-Process -FilePath $clientPath

@@ -322,8 +322,10 @@ EZGameLAN 安装脚本接管。
 ### 第四步：打包
 
 做一个简单安装器，安装固定版本的 OpenVPN 核心、TAP-Windows6、Service 和
-客户端，并注册 URI。分发目录携带经签名和 SHA-256 校验的官方 OpenVPN MSI，
-只选择核心与 TAP-Windows6 组件。升级和卸载只验证当前真实使用路径。
+客户端，并注册 URI。最终只分发一个 `EZGameLAN-Setup.exe`：安装器内嵌经过
+固定 SHA-256 和 Authenticode 签名校验的官方 OpenVPN MSI，只选择核心与
+TAP-Windows6 组件。玩家双击 EXE 并确认一次 UAC，安装细节和内部脚本不展示。
+升级和卸载只验证当前真实使用路径。
 
 ## 11. 首版完成标准
 
