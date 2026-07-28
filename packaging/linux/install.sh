@@ -83,8 +83,10 @@ install -m 0644 \
     /etc/systemd/system/ezgamelan-enroll.service
 
 systemctl daemon-reload
-systemctl enable --now ezgamelan-openvpn.service
-systemctl enable --now ezgamelan-enroll.service
+systemctl enable ezgamelan-openvpn.service
+systemctl enable ezgamelan-enroll.service
+systemctl restart ezgamelan-openvpn.service
+systemctl restart ezgamelan-enroll.service
 
 systemctl --quiet is-active ezgamelan-openvpn.service
 systemctl --quiet is-active ezgamelan-enroll.service
