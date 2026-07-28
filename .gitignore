@@ -6,13 +6,24 @@
 *.key
 *.crt
 *.pem
+*.csr
+*.p12
+*.pfx
+*.srl
 
 # Logs and test/build output
 *.log
 *.test
 *.exe
 *.dmp
+*.DMP
+*.msi
+*.zip
+*.stackdump
+*.prof
 coverage.out
+/build/
+/release/
 /EZGameLAN-diagnostics.txt
 /EZGameLAN-application-events.txt
 

@@ -131,7 +131,7 @@ dist/EZGameLAN-Admin.exe
 `%USERPROFILE%\.ssh\config`：
 
 ```sshconfig
-Host s0
+Host ezlan-server
     HostName SERVER_HOST
     User SSH_USER
     IdentityFile ~/.ssh/id_ed25519
@@ -140,12 +140,12 @@ Host s0
 先在终端确认 SSH 密钥登录和服务器指纹：
 
 ```powershell
-ssh s0
+ssh ezlan-server
 ```
 
 然后双击 `EZGameLAN-Admin.exe`：
 
-1. 在原生连接窗口输入 SSH 配置别名，如 `s0`，或直接输入
+1. 在原生连接窗口输入 SSH 配置别名，如 `ezlan-server`，或直接输入
    `SSH_USER@SERVER_HOST`；
 2. 点击“连接”；
 3. 管理端先验证 SSH、sudoers 和服务端管理协议；
@@ -167,3 +167,71 @@ ssh s0
 ```text
 sudo -n /usr/local/bin/ezlanctl admin-stdio
 ```
+
+## 6. 仓库目录结构
+
+```text
+.
+├── cmd/
+│   ├── ezlanctl/              Linux 服务端管理 CLI 和加入服务
+│   ├── ezgamelan-service/     Windows 后台 Service
+│   ├── ezgamelan-client/      Windows 玩家界面
+│   ├── ezgamelan-admin/       Windows 管理端启动器
+│   ├── ezgamelan-setup/       Windows 单文件安装启动器
+│   └── ezgamelan-pack/        安装包载荷封装工具
+├── internal/
+│   ├── admin/、adminweb/      服务端管理协议和本机 WebUI
+│   ├── client/、ipc/          客户端状态机和 Named Pipe
+│   ├── join/、netcfg/         加入流程和 TAP 网卡配置
+│   ├── config/、store/        服务端配置和文件状态
+│   ├── ezlan/、enroll/        设备管理和一次性领取服务
+│   ├── invite/、pki/          邀请格式和证书生命周期
+│   ├── openvpn/               OpenVPN 配置、状态和管理通道
+│   └── atomicfile/、logging/、setup/
+│                              原子写入、有界日志和安装包处理
+├── packaging/
+│   ├── linux/                 systemd、Nginx 和服务端安装脚本
+│   └── windows/               Windows 构建、安装和卸载脚本
+├── AGENTS.md                  项目开发约定
+├── DESIGN.md                  架构决策和边界
+├── go.mod、go.sum             Go 版本和锁定依赖
+└── README.md                  部署与使用说明
+```
+
+构建产物统一写入被 Git 忽略的 `dist/`，运行配置、证书、邀请、日志和诊断文件
+也不进入仓库。
+
+## 7. 简要架构说明
+
+```text
+Windows 玩家电脑
+  ezgamelan-client.exe
+          │ Named Pipe
+          ▼
+  EZGameLAN Service ── openvpn.exe + TAP-Windows6
+          │                         │
+          │ HTTPS/443               │ OpenVPN TAP，UDP/21111
+          ▼                         ▼
+  Nginx 固定加入路径             Linux OpenVPN Server
+          │                         │
+          ▼                         └── 单个 10.86.0.0/24 虚拟 LAN
+  ezlanctl serve（127.0.0.1:21112）
+
+Windows 管理电脑
+  EZGameLAN-Admin.exe
+          │ 本机 127.0.0.1 随机端口 WebUI
+          └── 系统 SSH ── sudo ezlanctl admin-stdio ── Linux 服务端
+```
+
+- **数据面：** OpenVPN TAP 负责二层虚拟局域网，所有玩家流量经中心服务器，
+  项目自身不代理或解析游戏数据；
+- **客户端边界：** 普通用户界面只发送受限 IPC 请求，唯一自有特权进程
+  `EZGameLAN Service` 管理 OpenVPN、活动配置和 TAP 网卡；
+- **加入流程：** 一次性 Token 通过 Nginx 的固定 HTTPS 路径领取设备配置，
+  加入服务仅监听服务器回环地址，不接管现有静态站点；
+- **管理流程：** WebUI 只在管理员电脑上按需监听回环地址，所有管理操作经系统
+  SSH 和固定的 `ezlanctl admin-stdio` 命令执行；
+- **服务端状态：** 配置、设备记录、证书和 CRL 使用本地文件保存，不引入数据库
+  或公网管理 API；
+- **运行恢复：** Linux 服务由 systemd 管理，Windows 连接由 Service 管理，
+  状态轮询、重连、日志和诊断均设置上限。
