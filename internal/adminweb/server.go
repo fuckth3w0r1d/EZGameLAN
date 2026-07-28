@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	idleTimeout       = 2 * time.Minute
+	idleTimeout       = 10 * time.Minute
 	actionTimeout     = 40 * time.Second
 	maxLocalBody      = 8 << 10
 	maxLocalResponse  = admin.MaxResponseSize + 4096
