@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -182,6 +183,11 @@ func main() {
 }
 
 func run() error {
+	// Win32 windows and their message queues belong to the OS thread that
+	// creates them. Keep creation and the entire message loop on that thread.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	ui.ctx, ui.cancel = context.WithCancel(context.Background())
 	defer ui.cancel()
 	if len(os.Args) == 2 {

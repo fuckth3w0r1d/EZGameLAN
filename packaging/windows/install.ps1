@@ -9,6 +9,7 @@ $ErrorActionPreference = "Stop"
 $OutputEncoding = [Console]::OutputEncoding
 
 $serviceName = "EZGameLAN"
+$productVersion = "0.1.1"
 $installDir = Join-Path $env:ProgramFiles "EZGameLAN"
 $dataDir = Join-Path $env:ProgramData "EZGameLAN"
 $installerDir = Join-Path $dataDir "installer"
@@ -220,7 +221,7 @@ New-Item -Path $uninstallKey -Force | Out-Null
 New-ItemProperty -Path $uninstallKey -Name "DisplayName" `
     -Value "EZGameLAN" -PropertyType String -Force | Out-Null
 New-ItemProperty -Path $uninstallKey -Name "DisplayVersion" `
-    -Value "0.1.0" -PropertyType String -Force | Out-Null
+    -Value $productVersion -PropertyType String -Force | Out-Null
 New-ItemProperty -Path $uninstallKey -Name "Publisher" `
     -Value "EZGameLAN" -PropertyType String -Force | Out-Null
 New-ItemProperty -Path $uninstallKey -Name "UninstallString" `

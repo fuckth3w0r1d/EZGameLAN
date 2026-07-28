@@ -11,7 +11,10 @@
 *.log
 *.test
 *.exe
+*.dmp
 coverage.out
+/EZGameLAN-diagnostics.txt
+/EZGameLAN-application-events.txt
 
 # Editors and operating systems
 .idea/
