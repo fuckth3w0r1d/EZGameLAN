@@ -3,6 +3,8 @@ param()
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = [Console]::OutputEncoding
 
 $serviceName = "EZGameLAN"
 $installDir = Join-Path $env:ProgramFiles "EZGameLAN"
@@ -49,10 +51,12 @@ function Stop-EZGameLANClient {
 
 if (-not (Test-Administrator)) {
     $arguments = @(
-        "-NoLogo",
-        "-NoProfile",
-        "-ExecutionPolicy", "Bypass",
-        "-File", "`"$PSCommandPath`""
+        "-NoLogo"
+        "-NoProfile"
+        "-ExecutionPolicy"
+        "Bypass"
+        "-File"
+        "`"$PSCommandPath`""
     )
     $process = Start-Process -FilePath "powershell.exe" `
         -ArgumentList $arguments -Verb RunAs -Wait -PassThru
@@ -99,9 +103,9 @@ $removeOpenVPN = (Test-Path -LiteralPath $managedMarker -PathType Leaf) `
     -and (Test-Path -LiteralPath $cachedOpenVPNMSI -PathType Leaf)
 if ($removeOpenVPN) {
     Invoke-Checked -FilePath "msiexec.exe" -ArgumentList @(
-        "/x",
-        "`"$cachedOpenVPNMSI`"",
-        "/qn",
+        "/x"
+        "`"$cachedOpenVPNMSI`""
+        "/qn"
         "/norestart"
     ) -SuccessExitCode @(0, 1605, 1614, 1641, 3010)
 }

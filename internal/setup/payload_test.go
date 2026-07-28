@@ -116,13 +116,24 @@ func TestBuiltArtifact(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name := range requiredFiles {
-		info, err := os.Stat(filepath.Join(destination, filepath.FromSlash(name)))
+		extractedPath := filepath.Join(destination, filepath.FromSlash(name))
+		info, err := os.Stat(extractedPath)
 		if err != nil {
 			t.Errorf("%s: %v", name, err)
 			continue
 		}
 		if !info.Mode().IsRegular() || info.Size() == 0 {
 			t.Errorf("%s is not a non-empty regular file", name)
+		}
+	}
+	for _, name := range []string{"install.ps1", "uninstall.ps1"} {
+		data, err := os.ReadFile(filepath.Join(destination, name))
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		if !bytes.HasPrefix(data, []byte{0xef, 0xbb, 0xbf}) {
+			t.Errorf("%s lacks the UTF-8 BOM required by Windows PowerShell 5.1", name)
 		}
 	}
 }

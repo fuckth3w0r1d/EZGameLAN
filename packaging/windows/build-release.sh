@@ -70,8 +70,11 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
 cp "${openvpn_msi}" "${stage}/third_party/${openvpn_name}"
 printf '%s *%s\n' "${openvpn_hash}" "${openvpn_name}" \
     >"${stage}/third_party/openvpn.sha256"
-cp "${root}/packaging/windows/install.ps1" "${stage}/install.ps1"
-cp "${root}/packaging/windows/uninstall.ps1" "${stage}/uninstall.ps1"
+# Windows PowerShell 5.1 needs the BOM to decode non-ASCII script text as UTF-8.
+printf '\357\273\277' >"${stage}/install.ps1"
+cat "${root}/packaging/windows/install.ps1" >>"${stage}/install.ps1"
+printf '\357\273\277' >"${stage}/uninstall.ps1"
+cat "${root}/packaging/windows/uninstall.ps1" >>"${stage}/uninstall.ps1"
 cat >"${stage}/THIRD_PARTY.txt" <<EOF
 OpenVPN Community Windows x64
 Package: ${openvpn_name}

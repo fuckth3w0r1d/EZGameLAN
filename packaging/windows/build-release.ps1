@@ -10,6 +10,24 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+function Assert-PowerShellSyntax {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    $tokens = $null
+    $parseErrors = $null
+    [System.Management.Automation.Language.Parser]::ParseFile(
+        $Path,
+        [ref]$tokens,
+        [ref]$parseErrors
+    ) | Out-Null
+    if ($parseErrors.Count -gt 0) {
+        throw "PowerShell 语法检查失败：$Path：$($parseErrors[0].Message)"
+    }
+}
+
 $openVPNPackageName = "OpenVPN-2.6.21-I001-amd64.msi"
 $openVPNHash = "845B654EDB92CC02A05DC335693980C4F2D4A4F09689D0844309753DE2CB5471"
 $openVPNSourceURL = "https://build.openvpn.net/downloads/releases/$openVPNPackageName"
@@ -28,6 +46,9 @@ $payloadDirectory = Join-Path $stage "payload"
 $thirdPartyDirectory = Join-Path $stage "third_party"
 $archivePath = Join-Path $temporary "payload.zip"
 $setupBase = Join-Path $temporary "ezgamelan-setup-base.exe"
+
+Assert-PowerShellSyntax -Path (Join-Path $PSScriptRoot "install.ps1")
+Assert-PowerShellSyntax -Path (Join-Path $PSScriptRoot "uninstall.ps1")
 
 $msi = Get-Item -LiteralPath $OpenVPNMSI
 if ($msi.Name -ne $openVPNPackageName) {
@@ -91,10 +112,17 @@ try {
         -Destination (Join-Path $thirdPartyDirectory $msi.Name)
     Set-Content -LiteralPath (Join-Path $thirdPartyDirectory "openvpn.sha256") `
         -Value "$openVPNHash *$openVPNPackageName" -Encoding ASCII
-    Copy-Item -LiteralPath (Join-Path $PSScriptRoot "install.ps1") `
-        -Destination $stage
-    Copy-Item -LiteralPath (Join-Path $PSScriptRoot "uninstall.ps1") `
-        -Destination $stage
+    # Windows PowerShell 5.1 needs the BOM to decode non-ASCII script text as UTF-8.
+    $utf8WithBOM = [System.Text.UTF8Encoding]::new($true)
+    foreach ($scriptName in @("install.ps1", "uninstall.ps1")) {
+        $scriptSource = Join-Path $PSScriptRoot $scriptName
+        $scriptDestination = Join-Path $stage $scriptName
+        $scriptText = [IO.File]::ReadAllText(
+            $scriptSource,
+            [System.Text.UTF8Encoding]::new($false)
+        )
+        [IO.File]::WriteAllText($scriptDestination, $scriptText, $utf8WithBOM)
+    }
 
     $thirdPartyNotice = @"
 OpenVPN Community Windows x64
@@ -111,10 +139,10 @@ does not launch or depend on OpenVPN GUI.
         -Value $thirdPartyNotice -Encoding UTF8
 
     Compress-Archive -LiteralPath @(
-        (Join-Path $stage "install.ps1"),
-        (Join-Path $stage "uninstall.ps1"),
-        (Join-Path $stage "THIRD_PARTY.txt"),
-        $payloadDirectory,
+        (Join-Path $stage "install.ps1")
+        (Join-Path $stage "uninstall.ps1")
+        (Join-Path $stage "THIRD_PARTY.txt")
+        $payloadDirectory
         $thirdPartyDirectory
     ) -DestinationPath $archivePath -CompressionLevel Optimal
 

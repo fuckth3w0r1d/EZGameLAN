@@ -5,6 +5,8 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = [Console]::OutputEncoding
 
 $serviceName = "EZGameLAN"
 $installDir = Join-Path $env:ProgramFiles "EZGameLAN"
@@ -69,10 +71,12 @@ if (-not [Environment]::Is64BitOperatingSystem) {
 
 if (-not (Test-Administrator)) {
     $arguments = @(
-        "-NoLogo",
-        "-NoProfile",
-        "-ExecutionPolicy", "Bypass",
-        "-File", "`"$PSCommandPath`""
+        "-NoLogo"
+        "-NoProfile"
+        "-ExecutionPolicy"
+        "Bypass"
+        "-File"
+        "`"$PSCommandPath`""
     )
     if ($Quiet) {
         $arguments += "-Quiet"
@@ -139,10 +143,10 @@ Stop-EZGameLANService
 Stop-EZGameLANClient
 
 Invoke-Checked -FilePath "msiexec.exe" -ArgumentList @(
-    "/i",
-    "`"$openVPNMSI`"",
-    "/qn",
-    "/norestart",
+    "/i"
+    "`"$openVPNMSI`""
+    "/qn"
+    "/norestart"
     "ADDLOCAL=OpenVPN,Drivers,Drivers.TAPWindows6"
 ) -SuccessExitCode @(0, 1641, 3010)
 
@@ -165,31 +169,31 @@ Copy-Item -LiteralPath $uninstallSource -Destination $uninstallPath -Force
 $existingService = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
 if ($null -eq $existingService) {
     Invoke-Checked -FilePath "sc.exe" -ArgumentList @(
-        "create",
-        $serviceName,
-        "binPath= `"$servicePath`"",
-        "start= auto",
+        "create"
+        $serviceName
+        "binPath= `"$servicePath`""
+        "start= auto"
         "DisplayName= EZGameLAN"
     )
 }
 else {
     Invoke-Checked -FilePath "sc.exe" -ArgumentList @(
-        "config",
-        $serviceName,
-        "binPath= `"$servicePath`"",
-        "start= auto",
+        "config"
+        $serviceName
+        "binPath= `"$servicePath`""
+        "start= auto"
         "DisplayName= EZGameLAN"
     )
 }
 Invoke-Checked -FilePath "sc.exe" -ArgumentList @(
-    "description",
-    $serviceName,
+    "description"
+    $serviceName
     "EZGameLAN virtual LAN connection service"
 )
 Invoke-Checked -FilePath "sc.exe" -ArgumentList @(
-    "failure",
-    $serviceName,
-    "reset= 86400",
+    "failure"
+    $serviceName
+    "reset= 86400"
     "actions= restart/5000/restart/15000"
 )
 
