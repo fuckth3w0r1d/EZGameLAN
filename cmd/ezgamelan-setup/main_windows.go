@@ -53,7 +53,7 @@ func main() {
 func confirmInstall() (bool, error) {
 	result, err := showMessage(
 		"EZGameLAN 安装",
-		"将安装 EZGameLAN、OpenVPN 核心和 TAP-Windows6 驱动。\n\n点击“确定”继续。",
+		"将安装或升级 EZGameLAN，并按需安装 OpenVPN 核心和 TAP-Windows6 驱动。\n\n点击“确定”继续。",
 		messageOKCancel|messageIconInfo,
 	)
 	if err != nil {

@@ -10,17 +10,21 @@ $ErrorActionPreference = "Stop"
 $OutputEncoding = [Console]::OutputEncoding
 
 $serviceName = "EZGameLAN"
-$productVersion = "0.1.4"
+$productVersion = "0.1.5"
+$requiredOpenVPNProductVersion = "2.6.21.0"
 $installDir = Join-Path $env:ProgramFiles "EZGameLAN"
 $dataDir = Join-Path $env:ProgramData "EZGameLAN"
 $installerDir = Join-Path $dataDir "installer"
 $managedMarker = Join-Path $installerDir "openvpn-installed-by-ezgamelan"
 $cachedOpenVPNMSI = Join-Path $installerDir "openvpn.msi"
+$tapServiceRegistryPath = "HKLM:\SYSTEM\CurrentControlSet\Services\tap0901"
+$tapDriverPath = Join-Path $env:SystemRoot "System32\drivers\tap0901.sys"
 $script:progressPath = ""
 $allowedProgressStages = @(
     "elevation"
     "validate"
     "verify"
+    "check_openvpn"
     "stop_existing"
     "install_openvpn"
     "copy_files"
@@ -91,6 +95,59 @@ function Invoke-Checked {
     if ($SuccessExitCode -notcontains $process.ExitCode) {
         throw "$FilePath 退出码为 $($process.ExitCode)"
     }
+}
+
+function Test-RegularFile {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$LiteralPath
+    )
+
+    $item = Get-Item -LiteralPath $LiteralPath -Force `
+        -ErrorAction SilentlyContinue
+    if ($null -eq $item -or $item.PSIsContainer) {
+        return $false
+    }
+    return -not [bool](
+        $item.Attributes -band [IO.FileAttributes]::ReparsePoint
+    )
+}
+
+function Test-OpenVPNDependencies {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$OpenVPNExecutable
+    )
+
+    if (-not (Test-RegularFile -LiteralPath $OpenVPNExecutable)) {
+        return $false
+    }
+    $openVPNItem = Get-Item -LiteralPath $OpenVPNExecutable -Force
+    if (-not [string]::Equals(
+        [string]$openVPNItem.VersionInfo.ProductVersion,
+        $requiredOpenVPNProductVersion,
+        [StringComparison]::Ordinal
+    )) {
+        return $false
+    }
+    if (-not (Test-Path -LiteralPath $tapServiceRegistryPath)) {
+        return $false
+    }
+    if (-not (Test-RegularFile -LiteralPath $tapDriverPath)) {
+        return $false
+    }
+    try {
+        $tapAdapters = @(
+            Get-NetAdapter -IncludeHidden -ErrorAction Stop |
+                Where-Object {
+                    $_.InterfaceDescription -like "TAP-Windows Adapter V9*"
+                }
+        )
+    }
+    catch {
+        return $false
+    }
+    return $tapAdapters.Count -gt 0
 }
 
 function Stop-EZGameLANService {
@@ -202,21 +259,28 @@ $openVPNExecutable = Join-Path $env:ProgramFiles "OpenVPN\bin\openvpn.exe"
 $managedOpenVPN = (Test-Path -LiteralPath $managedMarker -PathType Leaf) `
     -or -not (Test-Path -LiteralPath $openVPNExecutable -PathType Leaf)
 
+Set-InstallStage -Stage "check_openvpn"
+$openVPNDependenciesReady = Test-OpenVPNDependencies `
+    -OpenVPNExecutable $openVPNExecutable
+
 Set-InstallStage -Stage "stop_existing"
 Stop-EZGameLANService
 Stop-EZGameLANClient
 
-Set-InstallStage -Stage "install_openvpn"
-Invoke-Checked -FilePath "msiexec.exe" -ArgumentList @(
-    "/i"
-    "`"$openVPNMSI`""
-    "/qn"
-    "/norestart"
-    "ADDLOCAL=OpenVPN,Drivers,Drivers.TAPWindows6"
-) -SuccessExitCode @(0, 1641, 3010)
+if (-not $openVPNDependenciesReady) {
+    Set-InstallStage -Stage "install_openvpn"
+    Invoke-Checked -FilePath "msiexec.exe" -ArgumentList @(
+        "/i"
+        "`"$openVPNMSI`""
+        "/qn"
+        "/norestart"
+        "ADDLOCAL=OpenVPN,Drivers,Drivers.TAPWindows6"
+    ) -SuccessExitCode @(0, 1641, 3010)
 
-if (-not (Test-Path -LiteralPath $openVPNExecutable -PathType Leaf)) {
-    throw "OpenVPN 核心安装后未找到。"
+    if (-not (Test-OpenVPNDependencies `
+        -OpenVPNExecutable $openVPNExecutable)) {
+        throw "OpenVPN 或 TAP 驱动安装后检查未通过，请重启 Windows 后重新运行安装包。"
+    }
 }
 if ($managedOpenVPN) {
     Copy-Item -LiteralPath $openVPNMSI -Destination $cachedOpenVPNMSI -Force

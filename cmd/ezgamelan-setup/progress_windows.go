@@ -220,7 +220,7 @@ func createInstallControls(window uintptr) {
 	font, _, _ := installGetStock.Call(installDefaultFont)
 	installCreateLabel(
 		window,
-		"EZGameLAN、OpenVPN 核心和 TAP-Windows6",
+		"EZGameLAN（OpenVPN/TAP 按需安装）",
 		24, 20, 500, 24, font,
 	)
 	installUI.status = installCreateLabel(
@@ -243,7 +243,7 @@ func createInstallControls(window uintptr) {
 	)
 	installCreateLabel(
 		window,
-		"安装驱动期间可能出现 Windows 安全确认，请按提示继续。",
+		"需要安装驱动时可能出现 Windows 安全确认，请按提示继续。",
 		24, 145, 450, 22, font,
 	)
 }
