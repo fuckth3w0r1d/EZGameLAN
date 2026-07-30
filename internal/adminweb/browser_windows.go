@@ -8,11 +8,13 @@ import (
 )
 
 func OpenBrowser(url string) error {
-	if err := exec.Command(
+	command := exec.Command(
 		"rundll32.exe",
 		"url.dll,FileProtocolHandler",
 		url,
-	).Start(); err != nil {
+	)
+	configureHiddenWindow(command)
+	if err := command.Start(); err != nil {
 		return fmt.Errorf("打开系统浏览器: %w", err)
 	}
 	return nil

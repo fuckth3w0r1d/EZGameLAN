@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/r3t2/ezgamelan/internal/admin"
+	"github.com/r3t2/ezgamelan/internal/store"
 )
 
 const (
@@ -216,7 +217,23 @@ func (s *Server) handleAction(writer http.ResponseWriter, request *http.Request)
 			},
 		}
 	}
+	response = webResponse(response)
 	s.writeJSON(writer, http.StatusOK, response)
+}
+
+func webResponse(response admin.Response) admin.Response {
+	if response.Snapshot == nil {
+		return response
+	}
+	snapshot := *response.Snapshot
+	snapshot.Devices = make([]admin.Device, 0, len(response.Snapshot.Devices))
+	for _, device := range response.Snapshot.Devices {
+		if device.Status != store.StatusRevoked {
+			snapshot.Devices = append(snapshot.Devices, device)
+		}
+	}
+	response.Snapshot = &snapshot
+	return response
 }
 
 func (s *Server) validOrigin(request *http.Request) bool {

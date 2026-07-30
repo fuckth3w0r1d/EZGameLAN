@@ -108,15 +108,27 @@ async function refresh(quiet = false) {
 }
 
 function renderSnapshot(snapshot) {
+  const devices = snapshot.devices;
   $("public-host").textContent = snapshot.public_host;
   $("endpoint").textContent = snapshot.endpoint + " · " + snapshot.virtual_cidr;
   renderServiceState("openvpn-state", snapshot.openvpn_state);
   renderServiceState("enroll-state", snapshot.enroll_state);
-  const online = snapshot.devices.filter((device) => device.online).length;
+  const online = devices.filter((device) => device.online).length;
+  const received = devices.reduce(
+    (total, device) => total + Number(device.bytes_received || 0),
+    0,
+  );
+  const sent = devices.reduce(
+    (total, device) => total + Number(device.bytes_sent || 0),
+    0,
+  );
   $("online-count").textContent = String(online);
-  $("device-count").textContent = `共 ${snapshot.devices.length} 台已登记`;
+  $("device-count").textContent = `共 ${devices.length} 台可用`;
+  $("traffic-total").textContent = formatBytes(received + sent);
+  $("traffic-detail").textContent =
+    `接收 ${formatBytes(received)} · 发送 ${formatBytes(sent)}`;
   $("updated-at").textContent = "上次刷新：" + formatDate(snapshot.generated_at);
-  renderDevices(snapshot.devices);
+  renderDevices(devices);
 }
 
 function renderServiceState(id, state) {
@@ -313,7 +325,7 @@ function hideNotice() {
 
 function formatBytes(value) {
   if (!value) return "0 B";
-  const units = ["B", "KiB", "MiB", "GiB"];
+  const units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
   let number = Number(value);
   let index = 0;
   while (number >= 1024 && index < units.length - 1) {

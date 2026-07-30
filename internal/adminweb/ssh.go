@@ -60,6 +60,7 @@ func (s *SSHRemote) Call(
 		server,
 		"sudo", "-n", "/usr/local/bin/ezlanctl", "admin-stdio",
 	)
+	configureHiddenWindow(command)
 	command.Stdin = &input
 	var stdout, stderr boundedBuffer
 	stdout.limit = sshOutputLimit

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/r3t2/ezgamelan/internal/admin"
+	"github.com/r3t2/ezgamelan/internal/store"
 )
 
 type fakeRemote struct {
@@ -33,7 +34,10 @@ func (f *fakeRemote) Call(
 			PublicHost:   "vpn.example.test",
 			OpenVPNState: "active",
 			EnrollState:  "active",
-			Devices:      []admin.Device{},
+			Devices: []admin.Device{
+				{Name: "alice", Status: store.StatusActive},
+				{Name: "retired", Status: store.StatusRevoked},
+			},
 		},
 	}, nil
 }
@@ -114,6 +118,10 @@ func TestLocalServerUsesSecretPathAndChecksOrigin(t *testing.T) {
 	if !got.OK || remote.server != "s0" ||
 		remote.request.Action != admin.ActionSnapshot {
 		t.Fatalf("response=%#v remote=%#v", got, remote)
+	}
+	if got.Snapshot == nil || len(got.Snapshot.Devices) != 1 ||
+		got.Snapshot.Devices[0].Name != "alice" {
+		t.Fatalf("web devices = %#v", got.Snapshot)
 	}
 
 	overridePayload := []byte(
