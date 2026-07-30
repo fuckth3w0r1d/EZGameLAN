@@ -13,7 +13,7 @@ func TestReadProgressReturnsLatestStage(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "progress.txt")
 	if err := os.WriteFile(
 		path,
-		[]byte("elevation\nvalidate\nverify\ncheck_openvpn\n"),
+		[]byte("elevation\nvalidate\nverify\ncheck_openvpn\nstop_client\nstop_service\ncopy_files\n"),
 		0o600,
 	); err != nil {
 		t.Fatal(err)
@@ -22,8 +22,24 @@ func TestReadProgressReturnsLatestStage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if progress.Stage != "check_openvpn" || progress.Percent != 38 ||
+	if progress.Stage != "copy_files" || progress.Percent != 70 ||
 		progress.Message == "" {
+		t.Fatalf("progress = %#v", progress)
+	}
+}
+
+func TestReadProgressAcceptsOpenVPNRepairPath(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "progress.txt")
+	data := "check_openvpn\nstop_client\nstop_service\ninstall_openvpn\ncopy_files\n"
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	progress, err := setup.ReadProgress(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if progress.Stage != "copy_files" || progress.Percent != 70 {
 		t.Fatalf("progress = %#v", progress)
 	}
 }
@@ -33,7 +49,8 @@ func TestReadProgressRejectsUnknownAndBackwardStages(t *testing.T) {
 	for name, data := range map[string]string{
 		"unknown":          "validate\narbitrary\n",
 		"backward":         "verify\nvalidate\n",
-		"openvpn_backward": "stop_existing\ncheck_openvpn\n",
+		"openvpn_backward": "stop_client\ncheck_openvpn\n",
+		"stop_backward":    "stop_service\nstop_client\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "progress.txt")

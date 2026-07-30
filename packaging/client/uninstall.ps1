@@ -1,5 +1,7 @@
 [CmdletBinding()]
-param()
+param(
+    [switch]$Quiet
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
@@ -45,9 +47,48 @@ function Stop-EZGameLANClient {
     $processes = @(Get-Process -Name "ezgamelan-client" `
         -ErrorAction SilentlyContinue)
     foreach ($process in $processes) {
-        Stop-Process -Id $process.Id -Force
-        $process.WaitForExit()
-        $process.Dispose()
+        try {
+            if (-not $process.HasExited) {
+                $process.Kill()
+            }
+            if (-not $process.WaitForExit(5000)) {
+                throw "停止 EZGameLAN 客户端超过 5 秒，请结束进程后重新运行卸载程序。"
+            }
+        }
+        finally {
+            $process.Dispose()
+        }
+    }
+}
+
+function Stop-EZGameLANService {
+    $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+    if ($null -eq $service) {
+        return
+    }
+    try {
+        $service.Refresh()
+        $stopped = [System.ServiceProcess.ServiceControllerStatus]::Stopped
+        $stopPending = [System.ServiceProcess.ServiceControllerStatus]::StopPending
+        if ($service.Status -eq $stopped) {
+            return
+        }
+        if ($service.Status -ne $stopPending) {
+            $service.Stop()
+        }
+        try {
+            $service.WaitForStatus($stopped, [TimeSpan]::FromSeconds(20))
+        }
+        catch [System.ServiceProcess.TimeoutException] {
+            throw "停止 EZGameLAN 服务超过 20 秒，请重启 Windows 后重新运行卸载程序。"
+        }
+        $service.Refresh()
+        if ($service.Status -ne $stopped) {
+            throw "EZGameLAN 服务停止后状态异常，请重启 Windows 后重新运行卸载程序。"
+        }
+    }
+    finally {
+        $service.Dispose()
     }
 }
 
@@ -60,24 +101,30 @@ if (-not (Test-Administrator)) {
         "-File"
         "`"$PSCommandPath`""
     )
-    $process = Start-Process -FilePath "powershell.exe" `
-        -ArgumentList $arguments -Verb RunAs -Wait -PassThru
+    if ($Quiet) {
+        $arguments += "-Quiet"
+    }
+    $startParameters = @{
+        FilePath = "powershell.exe"
+        ArgumentList = $arguments
+        Verb = "RunAs"
+        Wait = $true
+        PassThru = $true
+    }
+    if ($Quiet) {
+        $startParameters["WindowStyle"] = "Hidden"
+    }
+    $process = Start-Process @startParameters
     exit $process.ExitCode
 }
 
+Stop-EZGameLANClient
+Stop-EZGameLANService
 $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
 if ($null -ne $service) {
-    if ($service.Status -ne [System.ServiceProcess.ServiceControllerStatus]::Stopped) {
-        Stop-Service -Name $serviceName -Force
-        $service.WaitForStatus(
-            [System.ServiceProcess.ServiceControllerStatus]::Stopped,
-            [TimeSpan]::FromSeconds(20)
-        )
-    }
     $service.Dispose()
     Invoke-Checked -FilePath "sc.exe" -ArgumentList @("delete", $serviceName)
 }
-Stop-EZGameLANClient
 
 if (Test-Path -LiteralPath $adapterMarker -PathType Leaf) {
     $originalAdapterName = (

@@ -99,6 +99,12 @@ try {
                 throw "构建 ezgamelan-client.exe 失败。"
             }
             & go build -trimpath -ldflags "-H=windowsgui" `
+                -o (Join-Path $payloadDirectory "ezgamelan-uninstall.exe") `
+                ./cmd/ezgamelan-uninstall
+            if ($LASTEXITCODE -ne 0) {
+                throw "构建 ezgamelan-uninstall.exe 失败。"
+            }
+            & go build -trimpath -ldflags "-H=windowsgui" `
                 -o $setupBase ./cmd/ezgamelan-setup
             if ($LASTEXITCODE -ne 0) {
                 throw "构建 ezgamelan-setup.exe 失败。"

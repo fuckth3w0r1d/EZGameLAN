@@ -68,6 +68,12 @@ GOCACHE="${GOCACHE:-/tmp/ezgamelan-gocache}" \
 GOMODCACHE="${GOMODCACHE:-/tmp/ezgamelan-gomodcache}" \
 GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
     go build -trimpath -ldflags "-H=windowsgui" \
+    -o "${stage}/payload/ezgamelan-uninstall.exe" \
+    "${root}/cmd/ezgamelan-uninstall"
+GOCACHE="${GOCACHE:-/tmp/ezgamelan-gocache}" \
+GOMODCACHE="${GOMODCACHE:-/tmp/ezgamelan-gomodcache}" \
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
+    go build -trimpath -ldflags "-H=windowsgui" \
     -o "${temporary}/ezgamelan-setup-base.exe" \
     "${root}/cmd/ezgamelan-setup"
 

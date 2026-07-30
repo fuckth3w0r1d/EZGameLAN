@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"crypto/sha256"
+	"debug/pe"
 	"encoding/binary"
 	"os"
 	"path/filepath"
@@ -126,6 +127,20 @@ func TestBuiltArtifact(t *testing.T) {
 			t.Errorf("%s is not a non-empty regular file", name)
 		}
 	}
+	uninstaller := filepath.Join(
+		destination,
+		"payload",
+		"ezgamelan-uninstall.exe",
+	)
+	file, err := pe.Open(uninstaller)
+	if err != nil {
+		t.Fatalf("open uninstall PE: %v", err)
+	}
+	defer file.Close()
+	header, ok := file.OptionalHeader.(*pe.OptionalHeader64)
+	if !ok || header.Subsystem != pe.IMAGE_SUBSYSTEM_WINDOWS_GUI {
+		t.Errorf("uninstaller is not a Windows x64 GUI executable")
+	}
 	for _, name := range []string{"install.ps1", "uninstall.ps1"} {
 		data, err := os.ReadFile(filepath.Join(destination, name))
 		if err != nil {
@@ -135,19 +150,51 @@ func TestBuiltArtifact(t *testing.T) {
 		if !bytes.HasPrefix(data, []byte{0xef, 0xbb, 0xbf}) {
 			t.Errorf("%s lacks the UTF-8 BOM required by Windows PowerShell 5.1", name)
 		}
+		for _, marker := range [][]byte{
+			[]byte(`Stop-Service`),
+			[]byte(`$process.WaitForExit()`),
+		} {
+			if bytes.Contains(data, marker) {
+				t.Errorf("%s contains unbounded stop marker %q", name, marker)
+			}
+		}
 		if name == "install.ps1" {
+			if bytes.Contains(data, []byte(`-Value "powershell.exe -NoProfile`)) {
+				t.Error("install.ps1 registers PowerShell instead of the GUI uninstaller")
+			}
 			for _, marker := range [][]byte{
-				[]byte(`$productVersion = "0.1.5"`),
+				[]byte(`$productVersion = "0.1.6"`),
 				[]byte(`$requiredOpenVPNProductVersion = "2.6.21.0"`),
 				[]byte(`[string]$ProgressFile`),
 				[]byte(`Set-InstallStage -Stage "check_openvpn"`),
+				[]byte(`Set-InstallStage -Stage "stop_client"`),
+				[]byte(`Set-InstallStage -Stage "stop_service"`),
 				[]byte(`Test-OpenVPNDependencies`),
+				[]byte(`$process.WaitForExit(5000)`),
+				[]byte(`$service.WaitForStatus`),
 				[]byte(`if (-not $openVPNDependenciesReady) {`),
 				[]byte(`Set-InstallStage -Stage "install_openvpn"`),
 				[]byte(`Set-InstallStage -Stage "start_service"`),
+				[]byte(`ezgamelan-uninstall.exe`),
+				[]byte(`EZGameLAN-Uninstall.exe`),
+				[]byte(`"UninstallString"`),
 			} {
 				if !bytes.Contains(data, marker) {
 					t.Errorf("install.ps1 lacks progress marker %q", marker)
+				}
+			}
+		}
+		if name == "uninstall.ps1" {
+			for _, marker := range [][]byte{
+				[]byte(`[switch]$Quiet`),
+				[]byte(`$arguments += "-Quiet"`),
+				[]byte(`$startParameters["WindowStyle"] = "Hidden"`),
+				[]byte(`$process.WaitForExit(5000)`),
+				[]byte(`$service.Stop()`),
+				[]byte(`$service.WaitForStatus`),
+			} {
+				if !bytes.Contains(data, marker) {
+					t.Errorf("uninstall.ps1 lacks bounded stop marker %q", marker)
 				}
 			}
 		}

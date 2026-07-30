@@ -31,6 +31,7 @@ var (
 		"THIRD_PARTY.txt":                   {},
 		"payload/ezgamelan-client.exe":      {},
 		"payload/ezgamelan-service.exe":     {},
+		"payload/ezgamelan-uninstall.exe":   {},
 		"third_party/openvpn.sha256":        {},
 		"third_party/" + OpenVPNPackageName: {},
 	}

@@ -94,7 +94,8 @@ EZGameLAN-Setup.exe
 
 1. 双击安装包并确认一次 UAC；
 2. 等待进度条依次完成安装包校验、OpenVPN/TAP 检查和按需安装、程序复制、
-   Service 配置和客户端启动；升级时会直接复用健康的固定版本依赖；
+   Service 配置和客户端启动；升级时会直接复用健康的固定版本依赖，并在有界时间
+   内关闭旧客户端和 Service；
 3. 将管理员提供的完整 `ezgamelan://` 加入链接粘贴到“添加局域网”输入框；
 4. 点击“添加并连接”；
 5. 显示“已连接”和 `10.86.0.x` 虚拟 IP 后启动游戏；
@@ -108,6 +109,9 @@ EZGameLAN-Setup.exe
 
 遇到连接问题时点击“导出日志”。导出内容包含最近的有界、脱敏客户端与 Service
 日志。
+
+卸载时从 Windows“已安装的应用”选择 EZGameLAN，或直接运行安装目录中的
+`EZGameLAN-Uninstall.exe`。卸载器使用原生确认窗口，后台脚本不会显示终端窗口。
 
 生成 Windows 安装包：
 
@@ -183,6 +187,7 @@ sudo -n /usr/local/bin/ezlanctl admin-stdio
 │   ├── ezgamelan-client/      Windows 玩家界面
 │   ├── ezgamelan-admin/       Windows 管理端启动器
 │   ├── ezgamelan-setup/       Windows 单文件安装启动器
+│   ├── ezgamelan-uninstall/   Windows 原生卸载启动器
 │   └── ezgamelan-pack/        安装包载荷封装工具
 ├── internal/
 │   ├── admin/、adminweb/      服务端管理协议和本机 WebUI

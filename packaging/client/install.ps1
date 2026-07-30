@@ -10,7 +10,7 @@ $ErrorActionPreference = "Stop"
 $OutputEncoding = [Console]::OutputEncoding
 
 $serviceName = "EZGameLAN"
-$productVersion = "0.1.5"
+$productVersion = "0.1.6"
 $requiredOpenVPNProductVersion = "2.6.21.0"
 $installDir = Join-Path $env:ProgramFiles "EZGameLAN"
 $dataDir = Join-Path $env:ProgramData "EZGameLAN"
@@ -25,7 +25,8 @@ $allowedProgressStages = @(
     "validate"
     "verify"
     "check_openvpn"
-    "stop_existing"
+    "stop_client"
+    "stop_service"
     "install_openvpn"
     "copy_files"
     "configure"
@@ -155,12 +156,29 @@ function Stop-EZGameLANService {
     if ($null -eq $service) {
         return
     }
-    if ($service.Status -ne [System.ServiceProcess.ServiceControllerStatus]::Stopped) {
-        Stop-Service -Name $serviceName -Force
-        $service.WaitForStatus(
-            [System.ServiceProcess.ServiceControllerStatus]::Stopped,
-            [TimeSpan]::FromSeconds(20)
-        )
+    try {
+        $service.Refresh()
+        $stopped = [System.ServiceProcess.ServiceControllerStatus]::Stopped
+        $stopPending = [System.ServiceProcess.ServiceControllerStatus]::StopPending
+        if ($service.Status -eq $stopped) {
+            return
+        }
+        if ($service.Status -ne $stopPending) {
+            $service.Stop()
+        }
+        try {
+            $service.WaitForStatus($stopped, [TimeSpan]::FromSeconds(20))
+        }
+        catch [System.ServiceProcess.TimeoutException] {
+            throw "停止 EZGameLAN 服务超过 20 秒，请重启 Windows 后重新运行安装包。"
+        }
+        $service.Refresh()
+        if ($service.Status -ne $stopped) {
+            throw "EZGameLAN 服务停止后状态异常，请重启 Windows 后重新运行安装包。"
+        }
+    }
+    finally {
+        $service.Dispose()
     }
 }
 
@@ -168,9 +186,17 @@ function Stop-EZGameLANClient {
     $processes = @(Get-Process -Name "ezgamelan-client" `
         -ErrorAction SilentlyContinue)
     foreach ($process in $processes) {
-        Stop-Process -Id $process.Id -Force
-        $process.WaitForExit()
-        $process.Dispose()
+        try {
+            if (-not $process.HasExited) {
+                $process.Kill()
+            }
+            if (-not $process.WaitForExit(5000)) {
+                throw "停止 EZGameLAN 客户端超过 5 秒，请结束进程后重新运行安装包。"
+            }
+        }
+        finally {
+            $process.Dispose()
+        }
     }
 }
 
@@ -216,11 +242,18 @@ Set-InstallStage -Stage "validate"
 $payloadDir = Join-Path $PSScriptRoot "payload"
 $clientSource = Join-Path $payloadDir "ezgamelan-client.exe"
 $serviceSource = Join-Path $payloadDir "ezgamelan-service.exe"
-$uninstallSource = Join-Path $PSScriptRoot "uninstall.ps1"
+$uninstallerSource = Join-Path $payloadDir "ezgamelan-uninstall.exe"
+$uninstallScriptSource = Join-Path $PSScriptRoot "uninstall.ps1"
 $thirdPartyDir = Join-Path $PSScriptRoot "third_party"
 $hashFile = Join-Path $thirdPartyDir "openvpn.sha256"
 
-foreach ($path in @($clientSource, $serviceSource, $uninstallSource, $hashFile)) {
+foreach ($path in @(
+    $clientSource
+    $serviceSource
+    $uninstallerSource
+    $uninstallScriptSource
+    $hashFile
+)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "安装包缺少文件：$path"
     }
@@ -263,9 +296,10 @@ Set-InstallStage -Stage "check_openvpn"
 $openVPNDependenciesReady = Test-OpenVPNDependencies `
     -OpenVPNExecutable $openVPNExecutable
 
-Set-InstallStage -Stage "stop_existing"
-Stop-EZGameLANService
+Set-InstallStage -Stage "stop_client"
 Stop-EZGameLANClient
+Set-InstallStage -Stage "stop_service"
+Stop-EZGameLANService
 
 if (-not $openVPNDependenciesReady) {
     Set-InstallStage -Stage "install_openvpn"
@@ -290,11 +324,14 @@ if ($managedOpenVPN) {
 
 $clientPath = Join-Path $installDir "ezgamelan-client.exe"
 $servicePath = Join-Path $installDir "ezgamelan-service.exe"
-$uninstallPath = Join-Path $installDir "uninstall.ps1"
+$uninstallerPath = Join-Path $installDir "EZGameLAN-Uninstall.exe"
+$uninstallScriptPath = Join-Path $installDir "uninstall.ps1"
 Set-InstallStage -Stage "copy_files"
 Copy-Item -LiteralPath $clientSource -Destination $clientPath -Force
 Copy-Item -LiteralPath $serviceSource -Destination $servicePath -Force
-Copy-Item -LiteralPath $uninstallSource -Destination $uninstallPath -Force
+Copy-Item -LiteralPath $uninstallerSource -Destination $uninstallerPath -Force
+Copy-Item -LiteralPath $uninstallScriptSource `
+    -Destination $uninstallScriptPath -Force
 
 $existingService = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
 Set-InstallStage -Stage "configure"
@@ -355,7 +392,7 @@ New-ItemProperty -Path $uninstallKey -Name "DisplayVersion" `
 New-ItemProperty -Path $uninstallKey -Name "Publisher" `
     -Value "EZGameLAN" -PropertyType String -Force | Out-Null
 New-ItemProperty -Path $uninstallKey -Name "UninstallString" `
-    -Value "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$uninstallPath`"" `
+    -Value "`"$uninstallerPath`"" `
     -PropertyType String -Force | Out-Null
 New-ItemProperty -Path $uninstallKey -Name "NoModify" `
     -Value 1 -PropertyType DWord -Force | Out-Null
