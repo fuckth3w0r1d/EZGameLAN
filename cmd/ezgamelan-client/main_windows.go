@@ -44,7 +44,11 @@ const (
 	wsCaption     = 0x00C00000
 	wsSysMenu     = 0x00080000
 	wsMinimizeBox = 0x00020000
+	wsVScroll     = 0x00200000
+	wsTabStop     = 0x00010000
 	esAutoHScroll = 0x0080
+	lbsNotify     = 0x0001
+	lbsNoIntegral = 0x0100
 
 	swHide         = 0
 	swShow         = 5
@@ -55,14 +59,22 @@ const (
 	defaultGUIFont = 17
 	emSetLimitText = 0x00C5
 	emSetCueBanner = 0x1501
+	lbAddString    = 0x0180
+	lbResetContent = 0x0184
+	lbSetCurSel    = 0x0186
+	lbGetCurSel    = 0x0188
+	lbnSelChange   = 1
+	lbnDoubleClick = 2
 
-	idJoin        = 1001
-	idConnect     = 1002
-	idDisconnect  = 1003
-	idExport      = 1004
-	idShow        = 1005
-	idExit        = 1006
-	idStatusTimer = 2001
+	idCredentialList = 1000
+	idJoin           = 1001
+	idConnect        = 1002
+	idDisconnect     = 1003
+	idExport         = 1004
+	idShow           = 1005
+	idExit           = 1006
+	idDelete         = 1007
+	idStatusTimer    = 2001
 
 	nimAdd    = 0x00000000
 	nimModify = 0x00000001
@@ -79,6 +91,11 @@ const (
 	ofnOverwritePrompt = 0x00000002
 	ofnNoChangeDir     = 0x00000008
 	ofnPathMustExist   = 0x00000800
+
+	mbYesNo       = 0x00000004
+	mbIconWarning = 0x00000030
+	mbDefButton2  = 0x00000100
+	idYes         = 6
 )
 
 var (
@@ -104,6 +121,7 @@ var (
 	procGetTextLength   = user32.NewProc("GetWindowTextLengthW")
 	procEnableWindow    = user32.NewProc("EnableWindow")
 	procSendMessage     = user32.NewProc("SendMessageW")
+	procMessageBox      = user32.NewProc("MessageBoxW")
 	procDestroyWindow   = user32.NewProc("DestroyWindow")
 	procSetForeground   = user32.NewProc("SetForegroundWindow")
 	procCreatePopupMenu = user32.NewProc("CreatePopupMenu")
@@ -122,10 +140,12 @@ var (
 
 type clientUI struct {
 	hwnd             uintptr
+	credentialList   uintptr
 	joinEdit         uintptr
 	joinButton       uintptr
 	connectButton    uintptr
 	disconnectButton uintptr
+	deleteButton     uintptr
 	exportButton     uintptr
 	statusLabel      uintptr
 
@@ -138,11 +158,13 @@ type clientUI struct {
 	response     ipc.Response
 	err          error
 	action       ipc.Action
+	targetID     string
 	polling      bool
 	pollResponse ipc.Response
 	pollErr      error
 
 	initialInput string
+	credentials  []ipc.Credential
 	lastStatus   ipc.Status
 	statusShown  bool
 	trayAdded    bool
@@ -274,7 +296,7 @@ func run() error {
 		0x80000000,
 		0x80000000,
 		680,
-		350,
+		520,
 		0,
 		0,
 		0,
@@ -317,6 +339,13 @@ func windowProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		return 0
 	case wmCommand:
 		switch uint16(wParam & 0xffff) {
+		case idCredentialList:
+			switch uint16((wParam >> 16) & 0xffff) {
+			case lbnSelChange:
+				ui.setButtonsForStatus(ui.lastStatus)
+			case lbnDoubleClick:
+				ui.connectSelected()
+			}
 		case idJoin:
 			raw := getText(ui.joinEdit, 8<<10)
 			setText(ui.joinEdit, "")
@@ -335,15 +364,14 @@ func windowProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 				Token:   invitation.Token,
 			}, "正在领取配置并连接…")
 		case idConnect:
-			ui.start(
-				ipc.Request{Version: ipc.Version, Action: ipc.ActionConnect},
-				"正在连接…",
-			)
+			ui.connectSelected()
 		case idDisconnect:
 			ui.start(
 				ipc.Request{Version: ipc.Version, Action: ipc.ActionDisconnect},
 				"正在断开…",
 			)
+		case idDelete:
+			ui.deleteSelected()
 		case idExport:
 			ui.start(
 				ipc.Request{Version: ipc.Version, Action: ipc.ActionDiagnostics},
@@ -397,12 +425,40 @@ func windowProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 
 func createControls(hwnd uintptr) {
 	font, _, _ := procGetStockObject.Call(defaultGUIFont)
-	createLabel(hwnd, "加入信息", 24, 18, 120, 22, font)
+	createLabel(hwnd, "已保存的局域网", 24, 18, 180, 22, font)
+	ui.credentialList = createControl(
+		"LISTBOX", "",
+		wsChild|wsVisible|wsBorder|wsVScroll|wsTabStop|lbsNotify|lbsNoIntegral,
+		24, 42, 620, 118,
+		hwnd, idCredentialList, font,
+	)
+	ui.connectButton = createControl(
+		"BUTTON", "连接所选", wsChild|wsVisible|wsTabStop,
+		24, 174, 145, 34, hwnd, idConnect, font,
+	)
+	ui.disconnectButton = createControl(
+		"BUTTON", "断开", wsChild|wsVisible|wsTabStop,
+		183, 174, 145, 34, hwnd, idDisconnect, font,
+	)
+	ui.deleteButton = createControl(
+		"BUTTON", "删除凭证", wsChild|wsVisible|wsTabStop,
+		342, 174, 145, 34, hwnd, idDelete, font,
+	)
+	ui.exportButton = createControl(
+		"BUTTON", "导出日志", wsChild|wsVisible|wsTabStop,
+		501, 174, 143, 34, hwnd, idExport, font,
+	)
+	ui.statusLabel = createControl(
+		"STATIC", "正在启动后台服务…", wsChild|wsVisible,
+		24, 224, 620, 88, hwnd, 0, font,
+	)
+
+	createLabel(hwnd, "添加局域网", 24, 326, 180, 22, font)
 	ui.joinEdit = createControl(
 		"EDIT",
 		ui.initialInput,
-		wsChild|wsVisible|wsBorder|esAutoHScroll,
-		24, 42, 620, 28,
+		wsChild|wsVisible|wsBorder|wsTabStop|esAutoHScroll,
+		24, 350, 620, 28,
 		hwnd, 0, font,
 	)
 	procSendMessage.Call(ui.joinEdit, emSetLimitText, 8<<10, 0)
@@ -415,28 +471,12 @@ func createControls(hwnd uintptr) {
 	createLabel(
 		hwnd,
 		"支持完整加入链接，也支持将 URL 和 Token 用空格或换行分隔后一起粘贴。",
-		24, 76, 620, 22, font,
+		24, 384, 620, 22, font,
 	)
 
 	ui.joinButton = createControl(
-		"BUTTON", "加入并连接", wsChild|wsVisible,
-		24, 108, 145, 34, hwnd, idJoin, font,
-	)
-	ui.connectButton = createControl(
-		"BUTTON", "连接", wsChild|wsVisible,
-		183, 108, 145, 34, hwnd, idConnect, font,
-	)
-	ui.disconnectButton = createControl(
-		"BUTTON", "断开", wsChild|wsVisible,
-		342, 108, 145, 34, hwnd, idDisconnect, font,
-	)
-	ui.exportButton = createControl(
-		"BUTTON", "导出日志", wsChild|wsVisible,
-		501, 108, 143, 34, hwnd, idExport, font,
-	)
-	ui.statusLabel = createControl(
-		"STATIC", "正在启动后台服务…", wsChild|wsVisible,
-		24, 168, 620, 100, hwnd, 0, font,
+		"BUTTON", "添加并连接", wsChild|wsVisible|wsTabStop,
+		24, 414, 145, 34, hwnd, idJoin, font,
 	)
 	ui.lastStatus = ipc.Status{State: ipc.StateNotConfigured}
 	ui.setButtonsForStatus(ui.lastStatus)
@@ -479,6 +519,60 @@ func createControl(
 	return handle
 }
 
+func (u *clientUI) connectSelected() {
+	credential, ok := u.selectedCredential()
+	if !ok {
+		u.showSelectionRequired()
+		return
+	}
+	u.start(ipc.Request{
+		Version:      ipc.Version,
+		Action:       ipc.ActionConnect,
+		CredentialID: credential.ID,
+	}, "正在连接所选局域网…")
+}
+
+func (u *clientUI) deleteSelected() {
+	credential, ok := u.selectedCredential()
+	if !ok {
+		u.showSelectionRequired()
+		return
+	}
+	message := "删除本机凭证“" + credentialDisplay(credential) + "”？\r\n\r\n" +
+		"删除后需要新的邀请链接才能再次加入。"
+	result, _, _ := procMessageBox.Call(
+		u.hwnd,
+		uintptr(unsafe.Pointer(utf16(message))),
+		uintptr(unsafe.Pointer(utf16("删除凭证"))),
+		mbYesNo|mbIconWarning|mbDefButton2,
+	)
+	if result != idYes {
+		return
+	}
+	u.start(ipc.Request{
+		Version:      ipc.Version,
+		Action:       ipc.ActionDeleteCredential,
+		CredentialID: credential.ID,
+	}, "正在删除本机凭证…")
+}
+
+func (u *clientUI) selectedCredential() (ipc.Credential, bool) {
+	if u.credentialList == 0 {
+		return ipc.Credential{}, false
+	}
+	selection, _, _ := procSendMessage.Call(u.credentialList, lbGetCurSel, 0, 0)
+	if int32(selection) < 0 || int(selection) >= len(u.credentials) {
+		return ipc.Credential{}, false
+	}
+	return u.credentials[int(selection)], true
+}
+
+func (u *clientUI) showSelectionRequired() {
+	status := "请先从列表中选择一个局域网。"
+	setText(u.statusLabel, status)
+	updateTrayIcon(u.hwnd, nimModify, status)
+}
+
 func (u *clientUI) start(request ipc.Request, status string) {
 	u.mu.Lock()
 	if u.busy {
@@ -487,6 +581,7 @@ func (u *clientUI) start(request ipc.Request, status string) {
 	}
 	u.busy = true
 	u.action = request.Action
+	u.targetID = request.CredentialID
 	u.mu.Unlock()
 	if request.Action != ipc.ActionStatus {
 		u.logger.Info("UI operation started", "action", request.Action)
@@ -564,6 +659,7 @@ func (u *clientUI) finishStatusPoll() {
 		updateTrayIcon(u.hwnd, nimModify, response.Message)
 		return
 	}
+	u.updateCredentials(response.Credentials, response.Status.CredentialID, false)
 	u.showStatus(response.Status)
 }
 
@@ -572,7 +668,9 @@ func (u *clientUI) finish() {
 	response := u.response
 	err := u.err
 	action := u.action
+	targetID := u.targetID
 	u.busy = false
+	u.targetID = ""
 	u.mu.Unlock()
 	if err != nil {
 		u.logger.Error("UI operation failed", "action", action, "error", err)
@@ -583,6 +681,13 @@ func (u *clientUI) finish() {
 		u.setButtonsForStatus(u.lastStatus)
 		return
 	}
+	preferredID := response.Status.CredentialID
+	forceSelection := action == ipc.ActionJoin || action == ipc.ActionConnect ||
+		action == ipc.ActionDeleteCredential
+	if !response.OK && targetID != "" {
+		preferredID = targetID
+	}
+	u.updateCredentials(response.Credentials, preferredID, forceSelection)
 	if !response.OK {
 		u.logger.Warn(
 			"UI operation rejected",
@@ -626,7 +731,7 @@ func (u *clientUI) showStatus(status ipc.Status) {
 			"error_code", status.ErrorCode,
 		)
 	}
-	text := statusText(status)
+	text := u.statusText(status)
 	setText(u.statusLabel, text)
 	updateTrayIcon(u.hwnd, nimModify, text)
 }
@@ -637,9 +742,11 @@ func (u *clientUI) setButtons(enabled bool) {
 		value = 1
 	}
 	for _, handle := range []uintptr{
+		u.credentialList,
 		u.joinButton,
 		u.connectButton,
 		u.disconnectButton,
+		u.deleteButton,
 		u.exportButton,
 	} {
 		if handle != 0 {
@@ -649,23 +756,31 @@ func (u *clientUI) setButtons(enabled bool) {
 }
 
 func (u *clientUI) setButtonsForStatus(status ipc.Status) {
-	joinEnabled := true
-	connectEnabled := false
+	selected, hasSelection := u.selectedCredential()
+	joinEnabled := status.State != ipc.StateStopping
+	listEnabled := status.State != ipc.StateStopping
+	connectEnabled := hasSelection
 	disconnectEnabled := false
+	deleteEnabled := hasSelection && status.State != ipc.StateStopping
 	switch status.State {
+	case ipc.StateNotConfigured:
+		connectEnabled = false
 	case ipc.StateDisconnected:
-		connectEnabled = true
 	case ipc.StateError:
-		connectEnabled = true
-		disconnectEnabled = true
+		disconnectEnabled = status.CredentialID != ""
 	case ipc.StateConnecting, ipc.StateConnected:
 		disconnectEnabled = true
+		connectEnabled = hasSelection && selected.ID != status.CredentialID
 	case ipc.StateStopping:
-		joinEnabled = false
+		connectEnabled = false
+		disconnectEnabled = false
+		deleteEnabled = false
 	}
+	setButtonEnabled(u.credentialList, listEnabled)
 	setButtonEnabled(u.joinButton, joinEnabled)
 	setButtonEnabled(u.connectButton, connectEnabled)
 	setButtonEnabled(u.disconnectButton, disconnectEnabled)
+	setButtonEnabled(u.deleteButton, deleteEnabled)
 	setButtonEnabled(u.exportButton, true)
 }
 
@@ -679,16 +794,115 @@ func setButtonEnabled(handle uintptr, enabled bool) {
 	}
 }
 
-func statusText(status ipc.Status) string {
+func (u *clientUI) updateCredentials(
+	credentials []ipc.Credential,
+	preferredID string,
+	forceSelection bool,
+) {
+	selectedID := ""
+	if selected, ok := u.selectedCredential(); ok {
+		selectedID = selected.ID
+	}
+	changed := !credentialListsEqual(u.credentials, credentials)
+	if changed {
+		u.statusShown = false
+		u.credentials = append([]ipc.Credential(nil), credentials...)
+		procSendMessage.Call(u.credentialList, lbResetContent, 0, 0)
+		for _, credential := range u.credentials {
+			text := utf16(credentialDisplay(credential))
+			procSendMessage.Call(
+				u.credentialList,
+				lbAddString,
+				0,
+				uintptr(unsafe.Pointer(text)),
+			)
+		}
+	}
+	if forceSelection {
+		selectedID = preferredID
+	}
+	index := credentialIndex(u.credentials, selectedID)
+	if index < 0 {
+		index = credentialIndex(u.credentials, preferredID)
+	}
+	if index < 0 && len(u.credentials) > 0 {
+		index = 0
+	}
+	if index >= 0 {
+		procSendMessage.Call(u.credentialList, lbSetCurSel, uintptr(index), 0)
+	}
+}
+
+func credentialListsEqual(left, right []ipc.Credential) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func credentialIndex(credentials []ipc.Credential, id string) int {
+	if id == "" {
+		return -1
+	}
+	for index, credential := range credentials {
+		if credential.ID == id {
+			return index
+		}
+	}
+	return -1
+}
+
+func credentialDisplay(credential ipc.Credential) string {
+	return credentialDisplayLimit(credential, 78)
+}
+
+func credentialDisplayLimit(credential ipc.Credential, limit int) string {
+	if credential.Legacy {
+		return "旧版局域网配置"
+	}
+	text := credential.Endpoint + "  |  " + credential.ServerName +
+		"  |  " + credential.ClientName
+	characters := []rune(text)
+	if len(characters) <= limit {
+		return text
+	}
+	return string(characters[:limit-3]) + "..."
+}
+
+func (u *clientUI) credentialName(id string) string {
+	index := credentialIndex(u.credentials, id)
+	if index < 0 {
+		return ""
+	}
+	return credentialDisplayLimit(u.credentials[index], 58)
+}
+
+func (u *clientUI) statusText(status ipc.Status) string {
+	credentialName := u.credentialName(status.CredentialID)
 	switch status.State {
 	case ipc.StateNotConfigured:
-		return "尚未加入。\r\n请粘贴管理员发送的加入链接。"
+		return "尚无已保存的局域网凭证。"
 	case ipc.StateDisconnected:
-		return "已断开虚拟局域网。"
+		if credentialName != "" {
+			return "已断开：" + credentialName
+		}
+		return "当前未连接局域网。"
 	case ipc.StateConnecting:
-		return "正在连接虚拟局域网…\r\n连接完成后这里会自动刷新。"
+		detail := "正在连接局域网…"
+		if credentialName != "" {
+			detail += "\r\n" + credentialName
+		}
+		return detail
 	case ipc.StateConnected:
 		detail := "已连接到虚拟局域网"
+		if credentialName != "" {
+			detail += "：" + credentialName
+		}
 		if status.VirtualIP != "" {
 			detail += "\r\n虚拟 IP：" + status.VirtualIP
 		}
@@ -701,9 +915,9 @@ func statusText(status ipc.Status) string {
 	case ipc.StateError:
 		if status.ErrorCode != "" {
 			return "连接出现问题（" + status.ErrorCode + "）。\r\n" +
-				"请点击“连接”重试，或导出日志进行检查。"
+				"请选择该局域网重试，或导出日志进行检查。"
 		}
-		return "连接出现问题。\r\n请点击“连接”重试，或导出日志进行检查。"
+		return "连接出现问题。\r\n请选择局域网重试，或导出日志进行检查。"
 	default:
 		return "状态未知。"
 	}
@@ -714,7 +928,7 @@ func (u *clientUI) exportDiagnostics(response ipc.Response) {
 	path, selected := chooseDiagnosticsPath(u.hwnd)
 	if !selected {
 		u.logger.Info("diagnostics export canceled")
-		setText(u.statusLabel, "已取消导出。\r\n"+statusText(response.Status))
+		setText(u.statusLabel, "已取消导出。\r\n"+u.statusText(response.Status))
 		return
 	}
 	diagnostics := response.Diagnostics

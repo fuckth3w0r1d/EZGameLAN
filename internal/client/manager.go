@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -26,7 +27,7 @@ const maxRestartAttempts = 5
 
 type Options struct {
 	OpenVPNPath       string
-	ConfigPath        string
+	LegacyConfigPath  string
 	AdapterMarkerPath string
 	HTTPClient        *http.Client
 	Logger            *slog.Logger
@@ -44,11 +45,15 @@ type Manager struct {
 	operationMu sync.Mutex
 	mu          sync.Mutex
 	status      ipc.Status
-	process     *exec.Cmd
-	processStop processStopSignal
-	processDone chan struct{}
-	stopWanted  bool
-	generation  uint64
+	credentials []ipc.Credential
+	store       *join.CredentialStore
+
+	activeConfigPath string
+	process          *exec.Cmd
+	processStop      processStopSignal
+	processDone      chan struct{}
+	stopWanted       bool
+	generation       uint64
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -57,7 +62,7 @@ type Manager struct {
 }
 
 func New(options Options) (*Manager, error) {
-	if !filepath.IsAbs(options.OpenVPNPath) || !filepath.IsAbs(options.ConfigPath) {
+	if !filepath.IsAbs(options.OpenVPNPath) || !filepath.IsAbs(options.LegacyConfigPath) {
 		return nil, errors.New("E_INSTALL_PATH: OpenVPN 和配置路径必须是绝对路径")
 	}
 	if options.AdapterMarkerPath != "" && !filepath.IsAbs(options.AdapterMarkerPath) {
@@ -71,8 +76,20 @@ func New(options Options) (*Manager, error) {
 	if options.ProcessLog == nil {
 		options.ProcessLog = io.Discard
 	}
+	credentialStore, err := join.NewCredentialStore(options.LegacyConfigPath)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	storedCredentials, err := credentialStore.List()
+	if err != nil {
+		cancel()
+		return nil, err
+	}
 	manager := &Manager{
-		options: options,
+		options:     options,
+		store:       credentialStore,
+		credentials: ipcCredentials(storedCredentials),
 		status: ipc.Status{
 			State: ipc.StateNotConfigured,
 		},
@@ -80,11 +97,8 @@ func New(options Options) (*Manager, error) {
 		cancel: cancel,
 		logger: logger,
 	}
-	if info, err := os.Lstat(options.ConfigPath); err == nil && info.Mode().IsRegular() {
+	if len(manager.credentials) > 0 {
 		manager.status.State = ipc.StateDisconnected
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-		cancel()
-		return nil, fmt.Errorf("E_INSTALL_PATH: 检查活动配置: %w", err)
 	}
 	return manager, nil
 }
@@ -95,14 +109,16 @@ func (m *Manager) Handle(ctx context.Context, request ipc.Request) ipc.Response 
 	case ipc.ActionJoin:
 		err = m.Join(ctx, request.URL, request.Token)
 	case ipc.ActionConnect:
-		err = m.Connect()
+		err = m.Connect(ctx, request.CredentialID)
 	case ipc.ActionDisconnect:
 		err = m.Disconnect(ctx)
+	case ipc.ActionDeleteCredential:
+		err = m.Delete(ctx, request.CredentialID)
 	case ipc.ActionStatus:
 	default:
 		err = errors.New("E_SERVICE_REQUEST: 未知操作")
 	}
-	status := m.Status()
+	status, credentials := m.Snapshot()
 	if err != nil {
 		code := errorCode(err)
 		m.logger.Error(
@@ -112,20 +128,22 @@ func (m *Manager) Handle(ctx context.Context, request ipc.Request) ipc.Response 
 			"error", err,
 		)
 		return ipc.Response{
-			Version: ipc.Version,
-			OK:      false,
-			Code:    code,
-			Message: userMessage(code),
-			Status:  status,
+			Version:     ipc.Version,
+			OK:          false,
+			Code:        code,
+			Message:     userMessage(code),
+			Status:      status,
+			Credentials: credentials,
 		}
 	}
 	if request.Action != ipc.ActionStatus {
 		m.logger.Info("client operation completed", "action", request.Action)
 	}
 	return ipc.Response{
-		Version: ipc.Version,
-		OK:      true,
-		Status:  status,
+		Version:     ipc.Version,
+		OK:          true,
+		Status:      status,
+		Credentials: credentials,
 	}
 }
 
@@ -144,32 +162,59 @@ func (m *Manager) Join(ctx context.Context, enrollURL, token string) error {
 	if err := m.stopProcess(ctx); err != nil {
 		return err
 	}
-	if _, err := join.Install(ctx, profile, m.options.ConfigPath); err != nil {
+	credential, err := m.store.Install(ctx, profile)
+	if err != nil {
 		return err
 	}
-	return m.connectLocked()
+	m.upsertCredential(credential)
+	configPath, err := m.store.ConfigPath(credential.ID)
+	if err != nil {
+		return err
+	}
+	return m.connectLocked(credential.ID, configPath)
 }
 
-func (m *Manager) Connect() error {
+func (m *Manager) Connect(ctx context.Context, credentialID string) error {
 	m.operationMu.Lock()
 	defer m.operationMu.Unlock()
-	return m.connectLocked()
+
+	m.mu.Lock()
+	exists := m.hasCredentialLocked(credentialID)
+	m.mu.Unlock()
+	if !exists {
+		return errors.New("E_CREDENTIAL_NOT_FOUND: 所选凭证不存在")
+	}
+	configPath, err := m.store.ConfigPath(credentialID)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	alreadyConnected := m.process != nil && m.status.CredentialID == credentialID
+	switching := m.process != nil
+	m.mu.Unlock()
+	if alreadyConnected {
+		return nil
+	}
+	if switching {
+		if err := m.stopProcess(ctx); err != nil {
+			return err
+		}
+	}
+	return m.connectLocked(credentialID, configPath)
 }
 
-func (m *Manager) connectLocked() error {
+func (m *Manager) connectLocked(credentialID, configPath string) error {
 	m.mu.Lock()
 	if m.process != nil {
 		m.mu.Unlock()
-		return nil
-	}
-	if _, err := os.Stat(m.options.ConfigPath); err != nil {
-		m.mu.Unlock()
-		if errors.Is(err, os.ErrNotExist) {
-			return errors.New("E_OPENVPN_CONFIG: 请先输入 URL 和 Token 加入")
-		}
-		return fmt.Errorf("E_OPENVPN_CONFIG: 检查活动配置: %w", err)
+		return errors.New("E_OPENVPN_STATE: OpenVPN 仍在运行")
 	}
 	m.stopWanted = false
+	m.activeConfigPath = configPath
+	m.status = ipc.Status{
+		State:        ipc.StateDisconnected,
+		CredentialID: credentialID,
+	}
 	command, stopSignal, done, generation, err := m.launchLocked()
 	m.mu.Unlock()
 	if err != nil {
@@ -177,6 +222,48 @@ func (m *Manager) connectLocked() error {
 	}
 	m.wg.Add(1)
 	go m.supervise(command, stopSignal, done, generation)
+	return nil
+}
+
+func (m *Manager) Delete(ctx context.Context, credentialID string) error {
+	m.operationMu.Lock()
+	defer m.operationMu.Unlock()
+
+	m.mu.Lock()
+	exists := m.hasCredentialLocked(credentialID)
+	active := m.status.CredentialID == credentialID
+	running := m.process != nil
+	if active && !running {
+		m.stopWanted = true
+	}
+	m.mu.Unlock()
+	if !exists {
+		return errors.New("E_CREDENTIAL_NOT_FOUND: 所选凭证不存在")
+	}
+	if active && running {
+		if err := m.stopProcess(ctx); err != nil {
+			return err
+		}
+	}
+	if err := m.store.Delete(credentialID); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	filtered := m.credentials[:0]
+	for _, credential := range m.credentials {
+		if credential.ID != credentialID {
+			filtered = append(filtered, credential)
+		}
+	}
+	m.credentials = filtered
+	if active {
+		m.activeConfigPath = ""
+		m.status = m.disconnectedStatusLocked("")
+	} else if len(m.credentials) == 0 {
+		m.activeConfigPath = ""
+		m.status = ipc.Status{State: ipc.StateNotConfigured}
+	}
+	m.mu.Unlock()
 	return nil
 }
 
@@ -193,13 +280,14 @@ func (m *Manager) stopProcess(ctx context.Context) error {
 	stopSignal := m.processStop
 	done := m.processDone
 	if command == nil {
-		if m.status.State != ipc.StateNotConfigured {
-			m.status = ipc.Status{State: ipc.StateDisconnected}
-		}
+		m.status = m.disconnectedStatusLocked(m.status.CredentialID)
 		m.mu.Unlock()
 		return nil
 	}
-	m.status = ipc.Status{State: ipc.StateStopping}
+	m.status = ipc.Status{
+		State:        ipc.StateStopping,
+		CredentialID: m.status.CredentialID,
+	}
 	m.mu.Unlock()
 
 	if stopSignal != nil {
@@ -230,9 +318,15 @@ func (m *Manager) stopProcess(ctx context.Context) error {
 }
 
 func (m *Manager) Status() ipc.Status {
+	status, _ := m.Snapshot()
+	return status
+}
+
+func (m *Manager) Snapshot() (ipc.Status, []ipc.Credential) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.status
+	credentials := append([]ipc.Credential(nil), m.credentials...)
+	return m.status, credentials
 }
 
 func (m *Manager) Shutdown(ctx context.Context) error {
@@ -255,9 +349,21 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 }
 
 func (m *Manager) launchLocked() (*exec.Cmd, processStopSignal, chan struct{}, uint64, error) {
-	command, stopSignal, err := newOpenVPNCommand(m.options.OpenVPNPath, m.options.ConfigPath)
+	credentialID := m.status.CredentialID
+	if credentialID == "" || m.activeConfigPath == "" {
+		m.status = m.disconnectedStatusLocked("")
+		return nil, nil, nil, 0, errors.New("E_OPENVPN_CONFIG: 请选择已保存的局域网")
+	}
+	command, stopSignal, err := newOpenVPNCommand(
+		m.options.OpenVPNPath,
+		m.activeConfigPath,
+	)
 	if err != nil {
-		m.status = ipc.Status{State: ipc.StateError, ErrorCode: "E_OPENVPN_START"}
+		m.status = ipc.Status{
+			State:        ipc.StateError,
+			CredentialID: credentialID,
+			ErrorCode:    "E_OPENVPN_START",
+		}
 		return nil, nil, nil, 0, fmt.Errorf("E_OPENVPN_START: 准备 OpenVPN: %w", err)
 	}
 	command.Env = minimalEnvironment()
@@ -265,7 +371,11 @@ func (m *Manager) launchLocked() (*exec.Cmd, processStopSignal, chan struct{}, u
 	command.Stderr = command.Stdout
 	if err := command.Start(); err != nil {
 		stopSignal.Close()
-		m.status = ipc.Status{State: ipc.StateError, ErrorCode: "E_OPENVPN_START"}
+		m.status = ipc.Status{
+			State:        ipc.StateError,
+			CredentialID: credentialID,
+			ErrorCode:    "E_OPENVPN_START",
+		}
 		return nil, nil, nil, 0, fmt.Errorf("E_OPENVPN_START: 启动 OpenVPN: %w", err)
 	}
 	m.generation++
@@ -274,7 +384,10 @@ func (m *Manager) launchLocked() (*exec.Cmd, processStopSignal, chan struct{}, u
 	m.process = command
 	m.processStop = stopSignal
 	m.processDone = done
-	m.status = ipc.Status{State: ipc.StateConnecting}
+	m.status = ipc.Status{
+		State:        ipc.StateConnecting,
+		CredentialID: credentialID,
+	}
 	m.logger.Info("OpenVPN process started", "pid", command.Process.Pid)
 	m.wg.Add(1)
 	go func() {
@@ -309,9 +422,7 @@ func (m *Manager) supervise(
 		stop := m.stopWanted || m.ctx.Err() != nil
 		if stop {
 			m.logger.Info("OpenVPN process stopped")
-			if m.status.State != ipc.StateNotConfigured {
-				m.status = ipc.Status{State: ipc.StateDisconnected}
-			}
+			m.status = m.disconnectedStatusLocked(m.status.CredentialID)
 			m.mu.Unlock()
 			close(currentDone)
 			return
@@ -321,7 +432,11 @@ func (m *Manager) supervise(
 			"error", waitErr,
 			"restart_attempt", restarts+1,
 		)
-		m.status = ipc.Status{State: ipc.StateError, ErrorCode: "E_OPENVPN_EXIT"}
+		m.status = ipc.Status{
+			State:        ipc.StateError,
+			CredentialID: m.status.CredentialID,
+			ErrorCode:    "E_OPENVPN_EXIT",
+		}
 		m.mu.Unlock()
 		close(currentDone)
 
@@ -373,9 +488,10 @@ func (m *Manager) monitorVirtualIP(generation uint64, done <-chan struct{}) {
 			m.mu.Lock()
 			if m.generation == generation && m.process != nil {
 				m.status = ipc.Status{
-					State:       ipc.StateConnected,
-					VirtualIP:   ip,
-					AdapterName: adapterName,
+					State:        ipc.StateConnected,
+					CredentialID: m.status.CredentialID,
+					VirtualIP:    ip,
+					AdapterName:  adapterName,
 				}
 				connected = true
 			}
@@ -393,6 +509,85 @@ func (m *Manager) monitorVirtualIP(generation uint64, done <-chan struct{}) {
 		case <-m.ctx.Done():
 			return
 		}
+	}
+}
+
+func (m *Manager) disconnectedStatusLocked(credentialID string) ipc.Status {
+	if len(m.credentials) == 0 {
+		return ipc.Status{State: ipc.StateNotConfigured}
+	}
+	if !m.hasCredentialLocked(credentialID) {
+		credentialID = ""
+	}
+	return ipc.Status{
+		State:        ipc.StateDisconnected,
+		CredentialID: credentialID,
+	}
+}
+
+func (m *Manager) hasCredentialLocked(id string) bool {
+	for _, credential := range m.credentials {
+		if credential.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *Manager) upsertCredential(stored join.Credential) {
+	credential := ipcCredential(stored)
+	m.mu.Lock()
+	found := false
+	for index := range m.credentials {
+		if m.credentials[index].ID == credential.ID {
+			m.credentials[index] = credential
+			found = true
+			break
+		}
+	}
+	if !found {
+		m.credentials = append(m.credentials, credential)
+	}
+	if m.status.State == ipc.StateNotConfigured {
+		m.status = ipc.Status{State: ipc.StateDisconnected}
+	}
+	sort.Slice(m.credentials, func(i, j int) bool {
+		left, right := m.credentials[i], m.credentials[j]
+		if left.Legacy != right.Legacy {
+			return left.Legacy
+		}
+		if left.Endpoint != right.Endpoint {
+			return left.Endpoint < right.Endpoint
+		}
+		if left.ServerName != right.ServerName {
+			return left.ServerName < right.ServerName
+		}
+		if left.ClientName != right.ClientName {
+			return left.ClientName < right.ClientName
+		}
+		return left.ID < right.ID
+	})
+	m.mu.Unlock()
+}
+
+func ipcCredentials(stored []join.Credential) []ipc.Credential {
+	if len(stored) == 0 {
+		return nil
+	}
+	credentials := make([]ipc.Credential, len(stored))
+	for index, credential := range stored {
+		credentials[index] = ipcCredential(credential)
+	}
+	return credentials
+}
+
+func ipcCredential(stored join.Credential) ipc.Credential {
+	return ipc.Credential{
+		ID:         stored.ID,
+		ClientName: stored.ClientName,
+		Endpoint:   stored.Endpoint,
+		ServerName: stored.ServerName,
+		Legacy:     stored.Legacy,
 	}
 }
 
@@ -537,8 +732,16 @@ func userMessage(code string) string {
 		return "连接加入服务器失败，请检查网络后重试"
 	case "E_JOIN_CONFIG":
 		return "收到的设备配置校验失败，请联系管理员"
+	case "E_CREDENTIAL_LIMIT":
+		return "本机保存的局域网凭证已达到上限，请删除不用的凭证后重试"
+	case "E_CREDENTIAL_NOT_FOUND", "E_CREDENTIAL_ID":
+		return "所选凭证不存在，请刷新列表后重试"
+	case "E_CREDENTIAL_READ":
+		return "本机凭证已损坏，请删除后使用新邀请重新加入"
+	case "E_CREDENTIAL_DELETE":
+		return "删除本机凭证失败，请重启 EZGameLAN 后重试"
 	case "E_OPENVPN_CONFIG":
-		return "请先输入 URL 和 Token 加入"
+		return "请选择一个已保存的局域网后连接"
 	case "E_OPENVPN_START", "E_OPENVPN_EXIT":
 		return "VPN 启动失败，请重新连接；仍失败时重新安装客户端"
 	case "E_OPENVPN_STOP":

@@ -9,12 +9,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"strconv"
 
+	"github.com/r3t2/ezgamelan/internal/invite"
 	"github.com/r3t2/ezgamelan/internal/join"
 )
 
 const (
-	Version         = 2
+	Version         = 3
 	MaxRequestSize  = 16 << 10
 	MaxResponseSize = 256 << 10
 	MaxDiagnostics  = 128 << 10
@@ -23,11 +26,12 @@ const (
 type Action string
 
 const (
-	ActionJoin        Action = "join"
-	ActionConnect     Action = "connect"
-	ActionDisconnect  Action = "disconnect"
-	ActionStatus      Action = "status"
-	ActionDiagnostics Action = "diagnostics"
+	ActionJoin             Action = "join"
+	ActionConnect          Action = "connect"
+	ActionDisconnect       Action = "disconnect"
+	ActionDeleteCredential Action = "delete_credential"
+	ActionStatus           Action = "status"
+	ActionDiagnostics      Action = "diagnostics"
 )
 
 type ConnectionState string
@@ -42,26 +46,37 @@ const (
 )
 
 type Request struct {
-	Version int    `json:"version"`
-	Action  Action `json:"action"`
-	URL     string `json:"url,omitempty"`
-	Token   string `json:"token,omitempty"`
+	Version      int    `json:"version"`
+	Action       Action `json:"action"`
+	URL          string `json:"url,omitempty"`
+	Token        string `json:"token,omitempty"`
+	CredentialID string `json:"credential_id,omitempty"`
+}
+
+type Credential struct {
+	ID         string `json:"id"`
+	ClientName string `json:"client_name,omitempty"`
+	Endpoint   string `json:"endpoint,omitempty"`
+	ServerName string `json:"server_name,omitempty"`
+	Legacy     bool   `json:"legacy,omitempty"`
 }
 
 type Status struct {
-	State       ConnectionState `json:"state"`
-	VirtualIP   string          `json:"virtual_ip,omitempty"`
-	AdapterName string          `json:"adapter_name,omitempty"`
-	ErrorCode   string          `json:"error_code,omitempty"`
+	State        ConnectionState `json:"state"`
+	CredentialID string          `json:"credential_id,omitempty"`
+	VirtualIP    string          `json:"virtual_ip,omitempty"`
+	AdapterName  string          `json:"adapter_name,omitempty"`
+	ErrorCode    string          `json:"error_code,omitempty"`
 }
 
 type Response struct {
-	Version     int    `json:"version"`
-	OK          bool   `json:"ok"`
-	Code        string `json:"code,omitempty"`
-	Message     string `json:"message,omitempty"`
-	Status      Status `json:"status"`
-	Diagnostics string `json:"diagnostics,omitempty"`
+	Version     int          `json:"version"`
+	OK          bool         `json:"ok"`
+	Code        string       `json:"code,omitempty"`
+	Message     string       `json:"message,omitempty"`
+	Status      Status       `json:"status"`
+	Credentials []Credential `json:"credentials,omitempty"`
+	Diagnostics string       `json:"diagnostics,omitempty"`
 }
 
 func WriteRequest(w io.Writer, request Request) error {
@@ -119,11 +134,18 @@ func (r Request) Validate() error {
 	}
 	switch r.Action {
 	case ActionJoin:
+		if r.CredentialID != "" {
+			return errors.New("E_SERVICE_REQUEST: 加入操作包含多余凭证 ID")
+		}
 		if _, err := join.NewInvitation(r.URL, r.Token); err != nil {
 			return fmt.Errorf("E_SERVICE_REQUEST: 加入参数错误: %w", err)
 		}
-	case ActionConnect, ActionDisconnect, ActionStatus, ActionDiagnostics:
-		if r.URL != "" || r.Token != "" {
+	case ActionConnect, ActionDeleteCredential:
+		if r.URL != "" || r.Token != "" || !join.ValidCredentialID(r.CredentialID) {
+			return errors.New("E_SERVICE_REQUEST: 凭证操作参数错误")
+		}
+	case ActionDisconnect, ActionStatus, ActionDiagnostics:
+		if r.URL != "" || r.Token != "" || r.CredentialID != "" {
 			return errors.New("E_SERVICE_REQUEST: 当前操作包含多余参数")
 		}
 	default:
@@ -149,13 +171,67 @@ func (r Response) Validate() error {
 	} else if r.Code == "" || r.Message == "" {
 		return errors.New("E_SERVICE_PROTOCOL: 错误响应缺少错误码或提示")
 	}
+	if len(r.Credentials) > join.MaxCredentials+1 {
+		return errors.New("E_SERVICE_PROTOCOL: 凭证列表过长")
+	}
+	credentialIDs := make(map[string]struct{}, len(r.Credentials))
+	for _, credential := range r.Credentials {
+		if err := credential.Validate(); err != nil {
+			return err
+		}
+		if _, exists := credentialIDs[credential.ID]; exists {
+			return errors.New("E_SERVICE_PROTOCOL: 凭证列表包含重复 ID")
+		}
+		credentialIDs[credential.ID] = struct{}{}
+	}
+	if r.Status.CredentialID != "" {
+		if !join.ValidCredentialID(r.Status.CredentialID) {
+			return errors.New("E_SERVICE_PROTOCOL: 当前凭证 ID 无效")
+		}
+		if _, exists := credentialIDs[r.Status.CredentialID]; !exists {
+			return errors.New("E_SERVICE_PROTOCOL: 当前凭证不在列表中")
+		}
+	}
+	if r.Status.State == StateNotConfigured &&
+		(len(r.Credentials) != 0 || r.Status.CredentialID != "") {
+		return errors.New("E_SERVICE_PROTOCOL: 未配置状态包含凭证")
+	}
 	if len(r.Message) > 1024 || len(r.Status.VirtualIP) > 64 ||
 		len(r.Status.AdapterName) > 128 || len(r.Status.ErrorCode) > 64 ||
-		len(r.Code) > 64 || len(r.Diagnostics) > MaxDiagnostics {
+		len(r.Status.CredentialID) > 64 || len(r.Code) > 64 ||
+		len(r.Diagnostics) > MaxDiagnostics {
 		return errors.New("E_SERVICE_PROTOCOL: 响应字段过长")
 	}
 	if !r.OK && r.Diagnostics != "" {
 		return errors.New("E_SERVICE_PROTOCOL: 错误响应包含诊断内容")
+	}
+	return nil
+}
+
+func (c Credential) Validate() error {
+	if !join.ValidCredentialID(c.ID) {
+		return errors.New("E_SERVICE_PROTOCOL: 凭证 ID 无效")
+	}
+	if c.Legacy {
+		if c.ID != join.LegacyCredentialID || c.ClientName != "" ||
+			c.Endpoint != "" || c.ServerName != "" {
+			return errors.New("E_SERVICE_PROTOCOL: 旧版凭证摘要无效")
+		}
+		return nil
+	}
+	if c.ID == join.LegacyCredentialID || !join.ValidCredentialID(c.ID) ||
+		!invite.ValidName(c.ClientName) ||
+		!invite.ValidNameWithLimit(c.ServerName, 64) ||
+		len(c.Endpoint) > 512 {
+		return errors.New("E_SERVICE_PROTOCOL: 凭证摘要字段无效")
+	}
+	host, portText, err := net.SplitHostPort(c.Endpoint)
+	if err != nil || host == "" {
+		return errors.New("E_SERVICE_PROTOCOL: 凭证服务端地址无效")
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port < 1 || port > 65535 {
+		return errors.New("E_SERVICE_PROTOCOL: 凭证服务端端口无效")
 	}
 	return nil
 }
@@ -219,7 +295,7 @@ func decodeRequest(data []byte) (Request, error) {
 		return Request{}, errors.New("IPC request must be an object")
 	}
 	var request Request
-	seen := make(map[string]struct{}, 4)
+	seen := make(map[string]struct{}, 5)
 	for decoder.More() {
 		nameToken, err := decoder.Token()
 		if err != nil {
@@ -242,6 +318,8 @@ func decodeRequest(data []byte) (Request, error) {
 			err = decoder.Decode(&request.URL)
 		case "token":
 			err = decoder.Decode(&request.Token)
+		case "credential_id":
+			err = decoder.Decode(&request.CredentialID)
 		default:
 			return Request{}, fmt.Errorf("unknown IPC field %q", name)
 		}

@@ -137,7 +137,7 @@ func TestBuiltArtifact(t *testing.T) {
 		}
 		if name == "install.ps1" {
 			for _, marker := range [][]byte{
-				[]byte(`$productVersion = "0.1.3"`),
+				[]byte(`$productVersion = "0.1.4"`),
 				[]byte(`[string]$ProgressFile`),
 				[]byte(`Set-InstallStage -Stage "install_openvpn"`),
 				[]byte(`Set-InstallStage -Stage "start_service"`),

@@ -9,15 +9,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/r3t2/ezgamelan/internal/invite"
 	"github.com/r3t2/ezgamelan/internal/ipc"
+	"github.com/r3t2/ezgamelan/internal/join"
+	"github.com/r3t2/ezgamelan/internal/pki"
 )
 
 func TestNewReportsConfigurationState(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	options := Options{
-		OpenVPNPath: filepath.Join(root, "openvpn"),
-		ConfigPath:  filepath.Join(root, "ezgamelan.ovpn"),
+		OpenVPNPath:      filepath.Join(root, "openvpn"),
+		LegacyConfigPath: filepath.Join(root, "ezgamelan.ovpn"),
 	}
 	manager, err := New(options)
 	if err != nil {
@@ -26,7 +29,7 @@ func TestNewReportsConfigurationState(t *testing.T) {
 	if got := manager.Status().State; got != ipc.StateNotConfigured {
 		t.Fatalf("state = %q", got)
 	}
-	if err := os.WriteFile(options.ConfigPath, []byte("test"), 0o600); err != nil {
+	if err := os.WriteFile(options.LegacyConfigPath, []byte("test"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	manager, err = New(options)
@@ -36,14 +39,81 @@ func TestNewReportsConfigurationState(t *testing.T) {
 	if got := manager.Status().State; got != ipc.StateDisconnected {
 		t.Fatalf("state = %q", got)
 	}
+	_, credentials := manager.Snapshot()
+	if len(credentials) != 1 || credentials[0].ID != join.LegacyCredentialID ||
+		!credentials[0].Legacy {
+		t.Fatalf("legacy credentials = %#v", credentials)
+	}
+}
+
+func TestDeleteCredentialUpdatesListAndState(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	legacyPath := filepath.Join(root, "ezgamelan.ovpn")
+	store, err := join.NewCredentialStore(legacyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential, err := store.Install(
+		context.Background(),
+		clientTestProfile(t, time.Now(), "alice"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := New(Options{
+		OpenVPNPath:      filepath.Join(root, "openvpn"),
+		LegacyConfigPath: legacyPath,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := manager.Handle(context.Background(), ipc.Request{
+		Version:      ipc.Version,
+		Action:       ipc.ActionDeleteCredential,
+		CredentialID: credential.ID,
+	})
+	if !response.OK || response.Status.State != ipc.StateNotConfigured ||
+		len(response.Credentials) != 0 {
+		t.Fatalf("delete response = %#v", response)
+	}
+	if err := response.Validate(); err != nil {
+		t.Fatalf("response validation: %v", err)
+	}
+	if _, err := store.ConfigPath(credential.ID); err == nil {
+		t.Fatal("deleted configuration remains available")
+	}
+}
+
+func TestHandleRejectsCredentialMissingFromStartupList(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	manager, err := New(Options{
+		OpenVPNPath:      filepath.Join(root, "openvpn"),
+		LegacyConfigPath: filepath.Join(root, "ezgamelan.ovpn"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := manager.Handle(context.Background(), ipc.Request{
+		Version:      ipc.Version,
+		Action:       ipc.ActionConnect,
+		CredentialID: "0123456789abcdef0123456789abcdef",
+	})
+	if response.OK || response.Code != "E_CREDENTIAL_NOT_FOUND" {
+		t.Fatalf("response = %#v", response)
+	}
+	if err := response.Validate(); err != nil {
+		t.Fatalf("response validation: %v", err)
+	}
 }
 
 func TestHandleStatus(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	manager, err := New(Options{
-		OpenVPNPath: filepath.Join(root, "openvpn"),
-		ConfigPath:  filepath.Join(root, "ezgamelan.ovpn"),
+		OpenVPNPath:      filepath.Join(root, "openvpn"),
+		LegacyConfigPath: filepath.Join(root, "ezgamelan.ovpn"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -73,7 +143,7 @@ func TestRenameVirtualAdapterRecordsOriginalName(t *testing.T) {
 	marker := filepath.Join(root, "adapter-original-name.txt")
 	manager, err := New(Options{
 		OpenVPNPath:       filepath.Join(root, "openvpn"),
-		ConfigPath:        filepath.Join(root, "ezgamelan.ovpn"),
+		LegacyConfigPath:  filepath.Join(root, "ezgamelan.ovpn"),
 		AdapterMarkerPath: marker,
 	})
 	if err != nil {
@@ -98,7 +168,7 @@ func TestRenameVirtualAdapterSkipsUnconfirmedInterface(t *testing.T) {
 	marker := filepath.Join(root, "adapter-original-name.txt")
 	manager, err := New(Options{
 		OpenVPNPath:       filepath.Join(root, "openvpn"),
-		ConfigPath:        filepath.Join(root, "ezgamelan.ovpn"),
+		LegacyConfigPath:  filepath.Join(root, "ezgamelan.ovpn"),
 		AdapterMarkerPath: marker,
 	})
 	if err != nil {
@@ -137,4 +207,31 @@ type errorWriter struct{}
 
 func (errorWriter) Write([]byte) (int, error) {
 	return 0, errors.New("test log failure")
+}
+
+func clientTestProfile(t *testing.T, now time.Time, name string) invite.Profile {
+	t.Helper()
+	pkiDir := filepath.Join(t.TempDir(), "pki")
+	if err := pki.Init(pkiDir, "ezgamelan-server", now); err != nil {
+		t.Fatal(err)
+	}
+	material, err := pki.IssueClient(pkiDir, name, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca, err := pki.ReadCACertificate(pkiDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return invite.Profile{
+		FormatVersion: invite.FormatVersion,
+		ClientName:    name,
+		Endpoint:      "vpn.example.test:21111",
+		ServerName:    "ezgamelan-server",
+		CAPEM:         string(ca),
+		CertPEM:       string(material.CertPEM),
+		KeyPEM:        string(material.KeyPEM),
+		TLSCryptV2PEM: "-----BEGIN OpenVPN tls-crypt-v2 client key-----\n" +
+			"TEST\n-----END OpenVPN tls-crypt-v2 client key-----\n",
+	}
 }

@@ -80,7 +80,7 @@ func (*serviceHandler) Execute(
 	logger.Info("EZGameLAN service starting")
 	manager, err := client.New(client.Options{
 		OpenVPNPath:       openVPNPath,
-		ConfigPath:        configPath,
+		LegacyConfigPath:  configPath,
 		AdapterMarkerPath: filepath.Join(filepath.Dir(configPath), "adapter-original-name.txt"),
 		Logger:            logger,
 		ProcessLog:        logFile,
@@ -99,7 +99,8 @@ func (*serviceHandler) Execute(
 			request ipc.Request,
 		) ipc.Response {
 			if request.Action == ipc.ActionDiagnostics {
-				return diagnosticsResponse(logFile, manager.Status())
+				status, credentials := manager.Snapshot()
+				return diagnosticsResponse(logFile, status, credentials)
 			}
 			return manager.Handle(requestCtx, request)
 		})
@@ -169,12 +170,14 @@ func (*serviceHandler) Execute(
 func diagnosticsResponse(
 	logFile *logging.RotatingFile,
 	status ipc.Status,
+	credentials []ipc.Credential,
 ) ipc.Response {
 	header := fmt.Sprintf(
 		"EZGameLAN diagnostics\r\n"+
 			"generated_at=%s\r\n"+
 			"platform=%s/%s\r\n"+
 			"state=%s\r\n"+
+			"saved_credentials=%d\r\n"+
 			"virtual_ip=%s\r\n"+
 			"adapter=%s\r\n"+
 			"\r\n=== recent bounded service log ===\r\n",
@@ -182,23 +185,26 @@ func diagnosticsResponse(
 		runtime.GOOS,
 		runtime.GOARCH,
 		status.State,
+		len(credentials),
 		status.VirtualIP,
 		status.AdapterName,
 	)
 	recent, err := logFile.Snapshot(ipc.MaxDiagnostics - len(header))
 	if err != nil {
 		return ipc.Response{
-			Version: ipc.Version,
-			OK:      false,
-			Code:    "E_INTERNAL_LOG",
-			Message: "读取诊断日志失败，请稍后重试",
-			Status:  status,
+			Version:     ipc.Version,
+			OK:          false,
+			Code:        "E_INTERNAL_LOG",
+			Message:     "读取诊断日志失败，请稍后重试",
+			Status:      status,
+			Credentials: credentials,
 		}
 	}
 	return ipc.Response{
 		Version:     ipc.Version,
 		OK:          true,
 		Status:      status,
+		Credentials: credentials,
 		Diagnostics: header + recent,
 	}
 }

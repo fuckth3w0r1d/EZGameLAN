@@ -14,7 +14,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-const PipeName = `\\.\pipe\EZGameLAN-v2`
+const PipeName = `\\.\pipe\EZGameLAN-v3`
 
 type Handler func(context.Context, Request) Response
 
