@@ -153,6 +153,7 @@ func TestBuiltArtifact(t *testing.T) {
 		for _, marker := range [][]byte{
 			[]byte(`Stop-Service`),
 			[]byte(`$process.WaitForExit()`),
+			[]byte(`$service.WaitForStatus`),
 		} {
 			if bytes.Contains(data, marker) {
 				t.Errorf("%s contains unbounded stop marker %q", name, marker)
@@ -163,15 +164,16 @@ func TestBuiltArtifact(t *testing.T) {
 				t.Error("install.ps1 registers PowerShell instead of the GUI uninstaller")
 			}
 			for _, marker := range [][]byte{
-				[]byte(`$productVersion = "0.1.6"`),
+				[]byte(`$productVersion = "0.1.7"`),
 				[]byte(`$requiredOpenVPNProductVersion = "2.6.21.0"`),
 				[]byte(`[string]$ProgressFile`),
 				[]byte(`Set-InstallStage -Stage "check_openvpn"`),
 				[]byte(`Set-InstallStage -Stage "stop_client"`),
 				[]byte(`Set-InstallStage -Stage "stop_service"`),
 				[]byte(`Test-OpenVPNDependencies`),
-				[]byte(`$process.WaitForExit(5000)`),
-				[]byte(`$service.WaitForStatus`),
+				[]byte(`Stop-Process -Name "ezgamelan-client"`),
+				[]byte(`[DateTime]::UtcNow.AddSeconds(10)`),
+				[]byte(`taskkill.exe`),
 				[]byte(`if (-not $openVPNDependenciesReady) {`),
 				[]byte(`Set-InstallStage -Stage "install_openvpn"`),
 				[]byte(`Set-InstallStage -Stage "start_service"`),
@@ -189,9 +191,10 @@ func TestBuiltArtifact(t *testing.T) {
 				[]byte(`[switch]$Quiet`),
 				[]byte(`$arguments += "-Quiet"`),
 				[]byte(`$startParameters["WindowStyle"] = "Hidden"`),
-				[]byte(`$process.WaitForExit(5000)`),
 				[]byte(`$service.Stop()`),
-				[]byte(`$service.WaitForStatus`),
+				[]byte(`Stop-Process -Name "ezgamelan-client"`),
+				[]byte(`[DateTime]::UtcNow.AddSeconds(10)`),
+				[]byte(`taskkill.exe`),
 			} {
 				if !bytes.Contains(data, marker) {
 					t.Errorf("uninstall.ps1 lacks bounded stop marker %q", marker)

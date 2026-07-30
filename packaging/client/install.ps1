@@ -10,7 +10,7 @@ $ErrorActionPreference = "Stop"
 $OutputEncoding = [Console]::OutputEncoding
 
 $serviceName = "EZGameLAN"
-$productVersion = "0.1.6"
+$productVersion = "0.1.7"
 $requiredOpenVPNProductVersion = "2.6.21.0"
 $installDir = Join-Path $env:ProgramFiles "EZGameLAN"
 $dataDir = Join-Path $env:ProgramData "EZGameLAN"
@@ -157,25 +157,44 @@ function Stop-EZGameLANService {
         return
     }
     try {
-        $service.Refresh()
         $stopped = [System.ServiceProcess.ServiceControllerStatus]::Stopped
-        $stopPending = [System.ServiceProcess.ServiceControllerStatus]::StopPending
+        $service.Refresh()
         if ($service.Status -eq $stopped) {
             return
         }
-        if ($service.Status -ne $stopPending) {
+        try {
             $service.Stop()
         }
-        try {
-            $service.WaitForStatus($stopped, [TimeSpan]::FromSeconds(20))
+        catch {
+            # The service may have changed state between Refresh and Stop.
         }
-        catch [System.ServiceProcess.TimeoutException] {
-            throw "停止 EZGameLAN 服务超过 20 秒，请重启 Windows 后重新运行安装包。"
+
+        $deadline = [DateTime]::UtcNow.AddSeconds(10)
+        while ([DateTime]::UtcNow -lt $deadline) {
+            $service.Refresh()
+            if ($service.Status -eq $stopped) {
+                return
+            }
+            Start-Sleep -Milliseconds 200
         }
-        $service.Refresh()
-        if ($service.Status -ne $stopped) {
-            throw "EZGameLAN 服务停止后状态异常，请重启 Windows 后重新运行安装包。"
+
+        $processes = @(Get-Process -Name "ezgamelan-service" `
+            -ErrorAction SilentlyContinue)
+        foreach ($process in $processes) {
+            & taskkill.exe /PID ([string]$process.Id) /T /F `
+                2>$null | Out-Null
+            $process.Dispose()
         }
+
+        $deadline = [DateTime]::UtcNow.AddSeconds(5)
+        while ([DateTime]::UtcNow -lt $deadline) {
+            $service.Refresh()
+            if ($service.Status -eq $stopped) {
+                return
+            }
+            Start-Sleep -Milliseconds 200
+        }
+        throw "停止 EZGameLAN 服务失败，请重启 Windows 后重新运行安装包。"
     }
     finally {
         $service.Dispose()
@@ -183,21 +202,17 @@ function Stop-EZGameLANService {
 }
 
 function Stop-EZGameLANClient {
-    $processes = @(Get-Process -Name "ezgamelan-client" `
-        -ErrorAction SilentlyContinue)
-    foreach ($process in $processes) {
-        try {
-            if (-not $process.HasExited) {
-                $process.Kill()
-            }
-            if (-not $process.WaitForExit(5000)) {
-                throw "停止 EZGameLAN 客户端超过 5 秒，请结束进程后重新运行安装包。"
-            }
+    Stop-Process -Name "ezgamelan-client" -Force `
+        -ErrorAction SilentlyContinue
+    $deadline = [DateTime]::UtcNow.AddSeconds(5)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        if (@(Get-Process -Name "ezgamelan-client" `
+            -ErrorAction SilentlyContinue).Count -eq 0) {
+            return
         }
-        finally {
-            $process.Dispose()
-        }
+        Start-Sleep -Milliseconds 100
     }
+    throw "停止 EZGameLAN 客户端失败，请手动结束进程后重新运行安装包。"
 }
 
 if (-not [Environment]::Is64BitOperatingSystem) {
