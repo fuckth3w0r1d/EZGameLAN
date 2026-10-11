@@ -21,7 +21,6 @@ import (
 	"github.com/r3t2/ezgamelan/internal/logging"
 	"github.com/r3t2/ezgamelan/internal/netcfg"
 	"golang.org/x/sys/windows"
-	"golang.org/x/sys/windows/registry"
 )
 
 func RunBackend(args []string, manifest string) error {
@@ -285,14 +284,6 @@ func prepareRuntime(ctx context.Context, root, encoded string) (string, error) {
 }
 
 func ensureTAPDriver(ctx context.Context, directory string) error {
-	key, err := registry.OpenKey(registry.LOCAL_MACHINE, `SYSTEM\CurrentControlSet\Services\tap0901`, registry.QUERY_VALUE)
-	if err == nil {
-		key.Close()
-		return nil
-	}
-	if !errors.Is(err, registry.ErrNotExist) {
-		return err
-	}
 	systemDirectory, err := windows.GetSystemDirectory()
 	if err != nil {
 		return err
@@ -300,8 +291,18 @@ func ensureTAPDriver(ctx context.Context, directory string) error {
 	command := exec.CommandContext(ctx, filepath.Join(systemDirectory, "pnputil.exe"), "/add-driver", filepath.Join(directory, "driver", "OemVista.inf"), "/install")
 	command.SysProcAttr = &windows.SysProcAttr{HideWindow: true}
 	command.Dir = directory
-	if err := command.Run(); err != nil {
-		return fmt.Errorf("安装 TAP 驱动失败，请检查系统驱动安装策略：%w", err)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			switch exit.ExitCode() {
+			case 259:
+				return nil
+			case 3010:
+				return fmt.Errorf("E_ADAPTER_REBOOT: TAP 驱动安装完成，需要重启 Windows：%w", err)
+			}
+		}
+		return fmt.Errorf("安装 TAP 驱动失败：%w；%s", err, strings.TrimSpace(string(output)))
 	}
 	return nil
 }

@@ -29,6 +29,9 @@ func (m *Manager) prepareManagement(configPath string) (*managementSession, erro
 	defer cancel()
 	guid, err := m.options.EnsureAdapter(ctx)
 	if err != nil {
+		if errorCode(err) == "E_ADAPTER_REBOOT" {
+			return nil, err
+		}
 		return nil, fmt.Errorf("E_ADAPTER: %w", err)
 	}
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
@@ -99,18 +102,31 @@ func (m *Manager) monitorManagement(session *managementSession, generation uint6
 		stop := context.AfterFunc(ctx, func() { connection.Close() })
 		defer stop()
 		_ = connection.SetDeadline(time.Now().Add(10 * time.Second))
-		_, err := fmt.Fprintf(connection, "%s\nstate on\nstate\nhold release\n", session.password)
+		_, err := fmt.Fprintf(connection, "%s\n", session.password)
 		if err == nil {
 			scanner := bufio.NewScanner(connection)
 			scanner.Buffer(make([]byte, 4096), 16<<10)
 			authenticated := false
 			for scanner.Scan() {
 				line := scanner.Text()
-				if strings.HasPrefix(line, "SUCCESS: password is correct") {
-					authenticated = true
-					_ = connection.SetDeadline(time.Time{})
-				}
 				if !authenticated {
+					line = strings.TrimPrefix(line, "ENTER PASSWORD:")
+					if line != "SUCCESS: password is correct" {
+						continue
+					}
+					authenticated = true
+					if err := connection.SetDeadline(time.Time{}); err != nil {
+						break
+					}
+					if _, err := fmt.Fprint(connection, "state on\nstate\n"); err != nil {
+						break
+					}
+					continue
+				}
+				if strings.HasPrefix(line, ">HOLD:") {
+					if _, err := fmt.Fprint(connection, "hold release\n"); err != nil {
+						break
+					}
 					continue
 				}
 				if state, ip, ok := parseManagementState(line); ok {

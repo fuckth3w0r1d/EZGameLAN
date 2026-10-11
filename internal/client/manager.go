@@ -635,7 +635,9 @@ func userMessage(code string) string {
 	case "E_OPENVPN_START", "E_OPENVPN_EXIT":
 		return "VPN 启动失败，请重新连接；仍失败时退出并重新解压完整便携包"
 	case "E_ADAPTER":
-		return "TAP 网卡准备失败，请检查驱动安装策略；系统要求重启时先重启电脑"
+		return "TAP 网卡准备失败，请导出日志查看具体错误"
+	case "E_ADAPTER_REBOOT":
+		return "TAP 驱动安装完成，请重启电脑后连接所选局域网"
 	case "E_OPENVPN_MANAGEMENT":
 		return "无法确认 VPN 连接状态，请重新连接并导出日志"
 	case "E_OPENVPN_STOP":

@@ -54,7 +54,7 @@ func EnsureDedicatedAdapter(ctx context.Context, ownerSID, tapctl string) (strin
 	command.Dir = filepath.Dir(tapctl)
 	output, err := command.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("create dedicated TAP adapter: %w", err)
+		return "", fmt.Errorf("create dedicated TAP adapter: %w: %s", err, strings.TrimSpace(string(output)))
 	}
 	guid = adapterGUIDPattern.FindString(string(output))
 	if guid == "" {
