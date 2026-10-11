@@ -134,14 +134,42 @@ func Init(dir, serverName string, now time.Time) error {
 		return fmt.Errorf("initialize OpenVPN server certificate: %w", err)
 	}
 
-	if exists, err := regularFileExists(filepath.Join(dir, CRLFile)); err != nil {
-		return err
-	} else if !exists {
-		if err := WriteCRL(dir, nil, now); err != nil {
-			return err
-		}
-	}
 	return nil
+}
+
+// ReadCRL verifies the signature before exposing persisted revocations.
+func ReadCRL(dir string) (*x509.RevocationList, error) {
+	data, err := os.ReadFile(filepath.Join(dir, CRLFile))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	block, rest := pem.Decode(data)
+	if block == nil || block.Type != "X509 CRL" || len(rest) != 0 {
+		return nil, errors.New("invalid CRL PEM")
+	}
+	crl, err := x509.ParseRevocationList(block.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	caData, err := ReadCACertificate(dir)
+	if err != nil {
+		return nil, err
+	}
+	caBlock, _ := pem.Decode(caData)
+	if caBlock == nil {
+		return nil, errors.New("invalid CA PEM")
+	}
+	ca, err := x509.ParseCertificate(caBlock.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	if err := crl.CheckSignatureFrom(ca); err != nil {
+		return nil, err
+	}
+	return crl, nil
 }
 
 func IssueClient(dir, name string, now time.Time) (ClientMaterial, error) {

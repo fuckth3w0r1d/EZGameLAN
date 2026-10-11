@@ -1,10 +1,11 @@
-// Package invite defines the fixed .ezlan payload and one-time tokens.
+// Package invite defines credential profiles and one-time tokens.
 package invite
 
 import (
 	"bytes"
 	"crypto"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -34,6 +35,19 @@ type Profile struct {
 }
 
 func Parse(data []byte, now time.Time) (Profile, error) {
+	p, err := Decode(data)
+	if err != nil {
+		return Profile{}, err
+	}
+	if err := p.Validate(now); err != nil {
+		return Profile{}, err
+	}
+	return p, nil
+}
+
+// Decode checks the JSON format and identity fields. Certificate validity is
+// checked by Validate before use, so expired stored profiles can still be listed.
+func Decode(data []byte) (Profile, error) {
 	if len(data) == 0 || len(data) > MaxSize {
 		return Profile{}, fmt.Errorf("profile size must be in range 1..%d bytes", MaxSize)
 	}
@@ -46,7 +60,7 @@ func Parse(data []byte, now time.Time) (Profile, error) {
 	if err := expectEOF(dec); err != nil {
 		return Profile{}, err
 	}
-	if err := p.Validate(now); err != nil {
+	if err := p.validateIdentity(); err != nil {
 		return Profile{}, err
 	}
 	return p, nil
@@ -67,7 +81,7 @@ func Marshal(p Profile, now time.Time) ([]byte, error) {
 	return data, nil
 }
 
-func (p Profile) Validate(now time.Time) error {
+func (p Profile) validateIdentity() error {
 	if p.FormatVersion != FormatVersion {
 		return fmt.Errorf("unsupported format_version %d", p.FormatVersion)
 	}
@@ -84,6 +98,28 @@ func (p Profile) Validate(now time.Time) error {
 	port, err := strconv.Atoi(portText)
 	if err != nil || port < 1 || port > 65535 {
 		return errors.New("endpoint port must be in range 1..65535")
+	}
+	if len(host) > 253 {
+		return errors.New("endpoint host is too long")
+	}
+	if net.ParseIP(host) == nil {
+		for _, r := range host {
+			if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '-') {
+				return errors.New("endpoint host contains unsupported characters")
+			}
+		}
+	}
+	return nil
+}
+
+func (p Profile) Validate(now time.Time) error {
+	if err := p.validateIdentity(); err != nil {
+		return err
+	}
+	for _, material := range []string{p.CAPEM, p.CertPEM, p.KeyPEM, p.TLSCryptV2PEM} {
+		if strings.ContainsAny(material, "<>") {
+			return errors.New("inline key material contains configuration delimiters")
+		}
 	}
 
 	ca, err := parseSingleCertificate("ca_pem", p.CAPEM)
@@ -273,6 +309,10 @@ func validateTLSCryptV2(text string) error {
 	if len(trimmed) > 16<<10 || !strings.HasPrefix(trimmed, begin+"\n") ||
 		!strings.HasSuffix(trimmed, "\n"+end) {
 		return errors.New("tls_crypt_v2_pem has invalid format")
+	}
+	payload := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(trimmed, begin), end))
+	if _, err := base64.StdEncoding.DecodeString(strings.Join(strings.Fields(payload), "")); err != nil || payload == "" {
+		return errors.New("tls_crypt_v2_pem contains invalid key data")
 	}
 	return nil
 }

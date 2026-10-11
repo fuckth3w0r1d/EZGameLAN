@@ -11,7 +11,6 @@ import (
 	"mime"
 	"net"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/r3t2/ezgamelan/internal/config"
@@ -98,30 +97,6 @@ func Fetch(ctx context.Context, client *http.Client, invitation Invitation) (inv
 	profile, err := invite.Parse(data, time.Now())
 	if err != nil {
 		return invite.Profile{}, fmt.Errorf("E_JOIN_CONFIG: 设备配置校验失败: %w", err)
-	}
-	return profile, nil
-}
-
-func LoadFile(path string) (invite.Profile, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return invite.Profile{}, fmt.Errorf("E_JOIN_FILE: 打开邀请文件: %w", err)
-	}
-	defer file.Close()
-	info, err := file.Stat()
-	if err != nil {
-		return invite.Profile{}, fmt.Errorf("E_JOIN_FILE: 检查邀请文件: %w", err)
-	}
-	if !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > invite.MaxSize {
-		return invite.Profile{}, errors.New("E_JOIN_FILE: 邀请文件类型或大小错误")
-	}
-	data, err := io.ReadAll(io.LimitReader(file, invite.MaxSize+1))
-	if err != nil {
-		return invite.Profile{}, fmt.Errorf("E_JOIN_FILE: 读取邀请文件: %w", err)
-	}
-	profile, err := invite.Parse(data, time.Now())
-	if err != nil {
-		return invite.Profile{}, fmt.Errorf("E_JOIN_CONFIG: 邀请文件校验失败: %w", err)
 	}
 	return profile, nil
 }

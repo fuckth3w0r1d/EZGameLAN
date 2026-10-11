@@ -17,7 +17,7 @@ Edition、L4D2 等支持局域网或 IP 直连的游戏。
 - **数据面：** OpenVPN 2.6 TAP、TAP-Windows6、`client-to-client`；
 - **服务端：** Linux、systemd、Go、文件状态；
 - **公网入口：** Nginx HTTPS，仅代理固定加入路径；
-- **Windows 客户端：** Go、Windows Service、原生 Win32 界面、Named Pipe；
+- **Windows 客户端：** Go、原生 Win32 界面、按需提权后台、Named Pipe；
 - **管理端：** Go 内嵌 HTML/CSS/JavaScript、本机回环 WebUI、系统 OpenSSH；
 - **状态管理：** JSON 文件、证书和 CRL，不使用数据库；
 - **主要 Go 依赖：** 标准库和 `golang.org/x/sys/windows`。
@@ -28,8 +28,6 @@ Edition、L4D2 等支持局域网或 IP 直连的游戏。
 二进制：
 
 ```bash
-GOCACHE=/tmp/ezgamelan-gocache \
-GOMODCACHE=/tmp/ezgamelan-gomodcache \
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
 go build -trimpath \
   -o dist/ezlanctl-linux-amd64 \
@@ -71,6 +69,7 @@ sudo systemctl reload nginx
 ```bash
 systemctl status ezgamelan-openvpn.service
 systemctl status ezgamelan-enroll.service
+systemctl status ezgamelan-maintain.timer
 ```
 
 常用服务端命令：
@@ -80,47 +79,78 @@ sudo ezlanctl status
 sudo ezlanctl list
 sudo ezlanctl invite DEVICE_NAME
 sudo ezlanctl revoke DEVICE_NAME
+sudo ezlanctl maintain
 ```
+
+维护定时器每天检查吊销记录和 CRL，在 CRL 剩余有效期不足 30 天时续期。OpenVPN
+启动前也会执行维护，恢复尚未完成的吊销发布。管理界面会提示 CRL 异常；吊销操作
+若提示发布失败，应排除文件权限或磁盘问题后执行 `sudo ezlanctl maintain`。
+
+更新 VPN 公网地址或加入 URL：
+
+```bash
+sudo ezlanctl config-update \
+  --host VPN_HOST \
+  --enroll-url https://WEB_HOST/ezgamelan/v1/enroll
+sudo systemctl restart ezgamelan-enroll.service
+```
+
+该命令保留 CA、设备身份和吊销状态，只影响后续生成的邀请及凭证。已保存的凭证和
+已有邀请仍包含原地址，应保留原域名解析，或安排玩家使用新邀请重新加入。管理端
+需重新连接以读取更新后的配置。重复运行部署脚本不能代替地址更新。
 
 ## 4. 客户端使用方法
 
-Windows x64 客户端使用单文件安装包：
+Windows x64 客户端使用目录式便携包，运行环境为 Windows 10/11：
 
 ```text
-EZGameLAN-Setup.exe
+dist/EZGameLAN-Portable.zip
 ```
 
-安装和加入步骤：
+解压和加入步骤：
 
-1. 双击安装包并确认一次 UAC；
-2. 等待进度条依次完成安装包校验、OpenVPN/TAP 检查和按需安装、程序复制、
-   Service 配置和客户端启动；升级时会直接复用健康的固定版本依赖，并在有界时间
-   内关闭旧客户端和 Service；
+1. 完整解压到当前用户可写、支持 Windows ACL 的本地目录，如
+   `PortableSoftware/EZGameLAN`，路径中不使用符号链接或目录重定向；
+2. 双击 `EZGameLAN.exe`，保留同目录的 `EZGameLAN-Backend.exe` 和 `openvpn/`；
 3. 将管理员提供的完整 `ezgamelan://` 加入链接粘贴到“添加局域网”输入框；
 4. 点击“添加并连接”；
-5. 显示“已连接”和 `10.86.0.x` 虚拟 IP 后启动游戏；
-6. 游戏优先使用其他玩家的虚拟 IP 直连。
+5. 首次连接时确认 UAC；当前运行期间的后续连接复用该后台。全新电脑会按需安装
+   TAP 驱动并创建专用网卡；如系统要求重启，重启后再次连接；
+6. 显示“已连接”和服务器分配的虚拟 IP（默认 `10.86.0.x`）后启动游戏；
+7. 游戏优先使用其他玩家的虚拟 IP 直连。
 
 客户端也接受用空格或换行分隔的 HTTPS URL 与 Token。领取成功后，凭证会出现在
 “已保存的局域网”列表；以后启动时选择它并点击“连接所选”，无需再次使用邀请
-链接。客户端可以保存多个局域网凭证，但同一时间只连接一个；切换时会先断开当前
-连接。删除凭证只清理本机配置，需要再次加入时应使用新的邀请链接。虚拟网卡友好
-名称为 `EZGameLAN`。
+链接。客户端最多保存 32 个局域网凭证，同一时间只连接一个。切换连接前会先保存
+新领取的凭证；即使随后连接失败，也可从列表重试。删除凭证只清理本机配置，需要
+再次加入时应使用新的邀请链接。专用网卡名称为 `EZGameLAN-` 加随机后缀，不复用
+其他软件的 TAP 网卡。同一台电脑同时只允许一个 EZGameLAN 连接后台。
 
-遇到连接问题时点击“导出日志”。导出内容包含最近的有界、脱敏客户端与 Service
-日志。
+凭证和客户端日志位于便携目录的 `data/`。退出后可在同一台电脑、同一 Windows
+用户下整体移动目录；升级时退出程序，
+用新包替换两份 EXE 和 `openvpn/`，保留 `data/`。凭证包含设备私钥，不应分享给
+其他玩家；每台电脑应使用独立邀请领取自己的身份。
 
-卸载时从 Windows“已安装的应用”选择 EZGameLAN，或直接运行安装目录中的
-`EZGameLAN-Uninstall.exe`。卸载器使用原生确认窗口，后台脚本不会显示终端窗口。
+关闭主窗口或选择托盘“退出”会停止 VPN，并结束后台。遇到连接问题时，在退出前
+点击“导出日志”，获取最近的有界、脱敏客户端与后台日志。后台日志随本次运行的
+受保护工作目录清理。
 
-生成 Windows 安装包：
+程序使用随包的固定版本 OpenVPN 核心，TAP 驱动属于系统组件。退出后删除便携目录
+即可移除程序和本地凭证；驱动与专用网卡会保留。需要移除专用网卡时，在设备管理器
+中确认其 `EZGameLAN-` 名称后删除。使用其他 VPN 软件时应保留共享 TAP 驱动。
 
-仓库已包含经过固定 SHA-256 校验的 OpenVPN Community Windows x64 MSI，直接
-执行：
+安装版用户应先使用原卸载器卸载旧版，停止其常驻 Service，再使用便携版和新邀请。
+便携版通过粘贴加入链接使用。
 
-```bash
-./packaging/client/build-release.sh
+在 Windows 仓库根目录生成便携包：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File ./packaging/client/build-release.ps1
 ```
+
+构建需要 Go 1.22 或更新版本，以及仓库中的固定版本 OpenVPN MSI。脚本校验 MSI
+后提取核心、DLL 和签名 TAP 驱动，不运行 MSI 安装。产物为上述 ZIP；WSL 或 Git
+Bash 可通过 `./packaging/client/build-release.sh` 调用 Windows 构建脚本。
 
 ## 5. 管理端配置使用方法
 
@@ -183,25 +213,22 @@ sudo -n /usr/local/bin/ezlanctl admin-stdio
 .
 ├── cmd/
 │   ├── ezlanctl/              Linux 服务端管理 CLI 和加入服务
-│   ├── ezgamelan-service/     Windows 后台 Service
+│   ├── ezgamelan-backend/     Windows 按需提权后台
 │   ├── ezgamelan-client/      Windows 玩家界面
-│   ├── ezgamelan-admin/       Windows 管理端启动器
-│   ├── ezgamelan-setup/       Windows 单文件安装启动器
-│   ├── ezgamelan-uninstall/   Windows 原生卸载启动器
-│   └── ezgamelan-pack/        安装包载荷封装工具
+│   └── ezgamelan-admin/       Windows 管理端启动器
 ├── internal/
 │   ├── admin/、adminweb/      服务端管理协议和本机 WebUI
 │   ├── client/、ipc/          客户端状态机和 Named Pipe
+│   ├── portable/             提权后台生命周期和依赖校验
 │   ├── join/、netcfg/         加入流程和 TAP 网卡配置
 │   ├── config/、store/        服务端配置和文件状态
 │   ├── ezlan/、enroll/        设备管理和一次性领取服务
 │   ├── invite/、pki/          邀请格式和证书生命周期
 │   ├── openvpn/               OpenVPN 配置、状态和管理通道
-│   └── atomicfile/、logging/、setup/
-│                              原子写入、有界日志和安装包处理
+│   └── atomicfile/、logging/   原子写入和有界日志
 ├── packaging/
 │   ├── server/                Linux 服务端部署、systemd 和 Nginx
-│   ├── client/                Windows 玩家端构建、安装和卸载
+│   ├── client/                Windows 玩家端便携包构建
 │   └── admin/                 Windows 管理端构建
 ├── third_party/
 │   └── openvpn/               固定版本 OpenVPN Windows MSI 和校验信息
@@ -216,10 +243,10 @@ sudo -n /usr/local/bin/ezlanctl admin-stdio
 
 ```text
 Windows 玩家电脑
-  ezgamelan-client.exe
+  EZGameLAN.exe
           │ Named Pipe
           ▼
-  EZGameLAN Service ── openvpn.exe + TAP-Windows6
+  EZGameLAN-Backend.exe ── openvpn.exe + TAP-Windows6
           │                         │
           │ HTTPS/443               │ OpenVPN TAP，UDP/21111
           ▼                         ▼
@@ -237,12 +264,15 @@ Windows 管理电脑
 - **数据面：** OpenVPN TAP 负责二层虚拟局域网，所有玩家流量经中心服务器，
   项目自身不代理或解析游戏数据；
 - **客户端边界：** 普通用户界面只发送受限 IPC 请求，唯一自有特权进程
-  `EZGameLAN Service` 管理 OpenVPN、本机凭证配置和 TAP 网卡；
+  `EZGameLAN-Backend.exe` 按需通过 UAC 启动，管理 OpenVPN、本机凭证和专用 TAP
+  网卡。管道限定启动用户并核对双方进程身份；用户可写目录中的连接指令不会直接
+  交给提权进程，后台从校验后的凭证材料生成固定配置；
 - **加入流程：** 一次性 Token 通过 Nginx 的固定 HTTPS 路径领取设备配置，
   加入服务仅监听服务器回环地址，不接管现有静态站点；
 - **管理流程：** WebUI 只在管理员电脑上按需监听回环地址，所有管理操作经系统
   SSH 和固定的 `ezlanctl admin-stdio` 命令执行；
 - **服务端状态：** 配置、设备记录、证书和 CRL 使用本地文件保存，不引入数据库
   或公网管理 API；
-- **运行恢复：** Linux 服务由 systemd 管理，Windows 连接由 Service 管理，
+- **运行恢复：** Linux 服务由 systemd 管理，Windows 后台随客户端运行，客户端
+  退出后停止连接。连接状态持续读取 OpenVPN 管理接口，并核对专用网卡的协商地址；
   状态轮询、重连、日志和诊断均设置上限。

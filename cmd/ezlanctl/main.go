@@ -47,6 +47,30 @@ func run(args []string) error {
 	switch rest[0] {
 	case "init":
 		return runInit(*configPath, rest[1:])
+	case "maintain":
+		if len(rest) != 1 {
+			return errors.New("maintain does not accept arguments")
+		}
+		manager, err := ezlan.Open(*configPath)
+		if err != nil {
+			return err
+		}
+		return manager.Maintain()
+	case "config-update":
+		fs := flag.NewFlagSet("config-update", flag.ContinueOnError)
+		host := fs.String("host", "", "public VPN hostname")
+		url := fs.String("enroll-url", "", "public HTTPS enrollment URL")
+		if err := fs.Parse(rest[1:]); err != nil {
+			return err
+		}
+		if fs.NArg() != 0 || (*host == "" && *url == "") {
+			return errors.New("config-update requires --host or --enroll-url")
+		}
+		if err := ezlan.UpdateEndpoints(*configPath, *host, *url); err != nil {
+			return err
+		}
+		fmt.Println("公网地址已更新；已有凭证及邀请继续使用原地址。请重启加入服务并重新连接管理端。")
+		return nil
 	case "invite":
 		return runInvite(*configPath, rest[1:])
 	case "serve":
@@ -138,32 +162,19 @@ func runInit(configPath string, args []string) error {
 }
 
 func runInvite(configPath string, args []string) error {
-	if len(args) == 0 {
-		return errors.New("invite requires CLIENT_NAME")
+	if len(args) != 1 {
+		return errors.New("invite requires exactly one CLIENT_NAME")
 	}
 	name := args[0]
-	fs := flag.NewFlagSet("invite", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	output := fs.String("file", "", "write an offline .ezlan file")
-	if err := fs.Parse(args[1:]); err != nil {
-		return err
-	}
-	if fs.NArg() != 0 {
-		return errors.New("invite has unexpected arguments")
-	}
 	manager, err := ezlan.Open(configPath)
 	if err != nil {
 		return fmt.Errorf("E_JOIN_CONFIG: %w", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	result, err := manager.Invite(ctx, name, *output)
+	result, err := manager.Invite(ctx, name)
 	if err != nil {
 		return fmt.Errorf("E_JOIN_CREATE: %w", err)
-	}
-	if result.File != "" {
-		fmt.Printf("离线配置已生成：%s\n请单独发送给 %s，导入后删除源文件。\n", result.File, name)
-		return nil
 	}
 	fmt.Printf("加入链接（%s 前有效）：\n%s\n", result.ExpiresAt.Local().Format(time.RFC3339), result.Link)
 	return nil
@@ -291,8 +302,10 @@ func printUsage() {
 
 Usage:
   ezlanctl [--config PATH] init --host HOST [options]
-  ezlanctl [--config PATH] invite CLIENT_NAME [--file PATH]
+  ezlanctl [--config PATH] invite CLIENT_NAME
   ezlanctl [--config PATH] serve
+  ezlanctl [--config PATH] maintain
+  ezlanctl [--config PATH] config-update [--host HOST] [--enroll-url URL]
   ezlanctl [--config PATH] revoke CLIENT_NAME
   ezlanctl [--config PATH] list
   ezlanctl [--config PATH] status

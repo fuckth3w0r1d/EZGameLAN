@@ -1,3 +1,5 @@
+//go:build linux
+
 package store_test
 
 import (
@@ -78,9 +80,8 @@ func TestExpiredInviteReleasesName(t *testing.T) {
 	if len(clients) != 0 {
 		t.Fatalf("expired clients = %#v", clients)
 	}
-	_, replacement := testProfile(t, now.Add(2*time.Minute), "alice")
-	replacement.SerialHex += "01"
-	if err := state.AddActive(replacement, now.Add(2*time.Minute)); err != nil {
+	replacementProfile, replacement := testProfile(t, now.Add(2*time.Minute), "alice")
+	if err := addAndClaim(t, state, replacementProfile, replacement, now.Add(2*time.Minute)); err != nil {
 		t.Fatalf("name was not released: %v", err)
 	}
 }
@@ -93,22 +94,13 @@ func TestClientLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < store.MaxClients; i++ {
-		client := store.Client{
-			Name:      fmt.Sprintf("client%d", i),
-			SerialHex: fmt.Sprintf("%02x", i+1),
-			CreatedAt: now,
-			NotAfter:  now.AddDate(1, 0, 0),
-		}
-		if err := state.AddActive(client, now); err != nil {
-			t.Fatalf("AddActive %d: %v", i, err)
+		profile, client := testProfile(t, now, fmt.Sprintf("client%d", i))
+		if err := addAndClaim(t, state, profile, client, now); err != nil {
+			t.Fatalf("claim client %d: %v", i, err)
 		}
 	}
-	err = state.AddActive(store.Client{
-		Name:      "overflow",
-		SerialHex: "ff",
-		CreatedAt: now,
-		NotAfter:  now.AddDate(1, 0, 0),
-	}, now)
+	profile, client := testProfile(t, now, "overflow")
+	err = addAndClaim(t, state, profile, client, now)
 	if !errors.Is(err, store.ErrClientLimit) {
 		t.Fatalf("overflow error = %v, want ErrClientLimit", err)
 	}
@@ -121,8 +113,8 @@ func TestRevokeAllowsSameNameReissueAndKeepsLedger(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, first := testProfile(t, now, "alice")
-	if err := state.AddActive(first, now); err != nil {
+	firstProfile, first := testProfile(t, now, "alice")
+	if err := addAndClaim(t, state, firstProfile, first, now); err != nil {
 		t.Fatal(err)
 	}
 	var ledger []store.Revocation
@@ -136,11 +128,11 @@ func TestRevokeAllowsSameNameReissueAndKeepsLedger(t *testing.T) {
 		t.Fatalf("first ledger = %#v", ledger)
 	}
 
-	_, second := testProfile(t, now.Add(2*time.Minute), "alice")
+	secondProfile, second := testProfile(t, now.Add(2*time.Minute), "alice")
 	if second.SerialHex == first.SerialHex {
 		t.Fatal("test generated duplicate serial")
 	}
-	if err := state.AddActive(second, now.Add(2*time.Minute)); err != nil {
+	if err := addAndClaim(t, state, secondProfile, second, now.Add(2*time.Minute)); err != nil {
 		t.Fatalf("reissue: %v", err)
 	}
 	if err := state.Revoke("alice", now.Add(3*time.Minute), func(items []store.Revocation) error {
@@ -186,4 +178,23 @@ func testProfile(t *testing.T, now time.Time, name string) (invite.Profile, stor
 		NotAfter:  material.NotAfter,
 	}
 	return profile, client
+}
+
+func addAndClaim(t *testing.T, state *store.Store, profile invite.Profile, client store.Client, now time.Time) error {
+	t.Helper()
+	token, err := invite.NewToken()
+	if err != nil {
+		return err
+	}
+	if err := state.AddPending(client, store.Pending{
+		FormatVersion: 1,
+		Name:          client.Name,
+		TokenHash:     invite.HashToken(token),
+		ExpiresAt:     now.Add(30 * time.Minute),
+		Profile:       profile,
+	}, now); err != nil {
+		return err
+	}
+	_, err = state.Claim(token, now)
+	return err
 }

@@ -3,6 +3,7 @@ package ezlan
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/url"
@@ -30,7 +31,6 @@ type Manager struct {
 
 type InviteResult struct {
 	Link      string
-	File      string
 	ExpiresAt time.Time
 }
 
@@ -44,6 +44,9 @@ func Initialize(ctx context.Context, configPath string, requested config.Config)
 				existing.PublicHost,
 				requested.PublicHost,
 			)
+		}
+		if existing.EnrollURL != requested.EnrollURL {
+			return errors.New("existing enrollment URL differs; use config-update --enroll-url")
 		}
 		cfg = existing
 	} else if versionErr := new(config.VersionError); errors.As(err, &versionErr) &&
@@ -64,11 +67,16 @@ func Initialize(ctx context.Context, configPath string, requested config.Config)
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
-	if _, err := store.Open(cfg.StateDir); err != nil {
+	state, err := store.Open(cfg.StateDir)
+	if err != nil {
 		return err
 	}
 	now := time.Now()
 	if err := pki.Init(cfg.PKIDir, cfg.ServerName, now); err != nil {
+		return err
+	}
+	manager := &Manager{cfg: cfg, store: state, now: time.Now}
+	if err := manager.Maintain(); err != nil {
 		return err
 	}
 	serverTLSKey := filepath.Join(cfg.PKIDir, "tls-crypt-v2-server.key")
@@ -128,7 +136,7 @@ func (m *Manager) State() *store.Store {
 
 func (m *Manager) Invite(
 	ctx context.Context,
-	name, outputPath string,
+	name string,
 ) (InviteResult, error) {
 	if !invite.ValidName(name) {
 		return InviteResult{}, errors.New("client name must use 1..32 letters, digits, '-' or '_'")
@@ -160,33 +168,11 @@ func (m *Manager) Invite(
 		KeyPEM:        string(material.KeyPEM),
 		TLSCryptV2PEM: string(tlsKey),
 	}
-	profileData, err := invite.Marshal(profile, now)
-	if err != nil {
-		return InviteResult{}, err
-	}
 	client := store.Client{
 		Name:      name,
 		SerialHex: material.SerialHex,
 		CreatedAt: now,
 		NotAfter:  material.NotAfter,
-	}
-
-	if outputPath != "" {
-		if !filepath.IsAbs(outputPath) {
-			absolute, err := filepath.Abs(outputPath)
-			if err != nil {
-				return InviteResult{}, fmt.Errorf("resolve output path: %w", err)
-			}
-			outputPath = absolute
-		}
-		if err := atomicfile.Create(outputPath, profileData, 0o600); err != nil {
-			return InviteResult{}, err
-		}
-		if err := m.store.AddActive(client, now); err != nil {
-			_ = os.Remove(outputPath)
-			return InviteResult{}, err
-		}
-		return InviteResult{File: outputPath}, nil
 	}
 
 	token, err := invite.NewToken()
@@ -221,6 +207,9 @@ func buildJoinLink(enrollURL, token string) string {
 }
 
 func (m *Manager) Revoke(name string) error {
+	if err := m.Maintain(); err != nil {
+		return err
+	}
 	now := m.now()
 	return m.store.Revoke(name, now, func(records []store.Revocation) error {
 		revoked := make([]pki.Revocation, 0, len(records))
@@ -232,6 +221,81 @@ func (m *Manager) Revoke(name string) error {
 		}
 		return pki.WriteCRL(m.cfg.PKIDir, revoked, now)
 	})
+}
+
+// Maintain recovers interrupted revocations and renews CRLs before expiry.
+func (m *Manager) Maintain() error {
+	now := m.now()
+	var published map[string]bool
+	var expires time.Time
+	return m.store.ReconcileRevocations(func() ([]store.Revocation, error) {
+		crl, err := pki.ReadCRL(m.cfg.PKIDir)
+		if err != nil {
+			return nil, err
+		}
+		published = make(map[string]bool)
+		if crl == nil {
+			return nil, nil
+		}
+		expires = crl.NextUpdate
+		records := make([]store.Revocation, 0, len(crl.RevokedCertificateEntries))
+		for _, entry := range crl.RevokedCertificateEntries {
+			serial := hex.EncodeToString(entry.SerialNumber.Bytes())
+			published[serial] = true
+			records = append(records, store.Revocation{SerialHex: serial, RevokedAt: entry.RevocationTime})
+		}
+		return records, nil
+	}, func(records []store.Revocation) error {
+		refresh := !expires.After(now.Add(30 * 24 * time.Hour))
+		revoked := make([]pki.Revocation, 0, len(records))
+		for _, record := range records {
+			refresh = refresh || !published[record.SerialHex]
+			revoked = append(revoked, pki.Revocation{SerialHex: record.SerialHex, At: record.RevokedAt})
+		}
+		if !refresh {
+			return nil
+		}
+		return pki.WriteCRL(m.cfg.PKIDir, revoked, now)
+	})
+}
+
+func (m *Manager) CRLWarning() string {
+	crl, err := pki.ReadCRL(m.cfg.PKIDir)
+	if err != nil || crl == nil {
+		return "吊销列表不可用，请运行 ezlanctl maintain"
+	}
+	if !crl.NextUpdate.After(m.now().Add(30 * 24 * time.Hour)) {
+		return "吊销列表即将或已经过期，请检查维护任务"
+	}
+	records, err := m.store.Revocations()
+	if err != nil {
+		return "吊销记录读取失败，请检查维护任务"
+	}
+	published := make(map[string]bool, len(crl.RevokedCertificateEntries))
+	for _, entry := range crl.RevokedCertificateEntries {
+		published[hex.EncodeToString(entry.SerialNumber.Bytes())] = true
+	}
+	for _, record := range records {
+		if !published[record.SerialHex] {
+			return "存在尚未生效的吊销记录，请重试吊销并检查维护任务"
+		}
+	}
+	return ""
+}
+
+// UpdateEndpoints changes advertised addresses without replacing identities.
+func UpdateEndpoints(path, host, enrollURL string) error {
+	cfg, err := config.Load(path)
+	if err != nil {
+		return err
+	}
+	if host != "" {
+		cfg.PublicHost = host
+	}
+	if enrollURL != "" {
+		cfg.EnrollURL = enrollURL
+	}
+	return config.Replace(path, cfg)
 }
 
 func (m *Manager) List() ([]store.Client, error) {

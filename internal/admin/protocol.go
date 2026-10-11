@@ -25,16 +25,6 @@ const (
 	ActionDiagnostics    Action = "diagnostics"
 )
 
-var Capabilities = []string{
-	string(ActionSnapshot),
-	string(ActionInvite),
-	string(ActionRevoke),
-	string(ActionDisconnect),
-	string(ActionRestartOpenVPN),
-	string(ActionRestartEnroll),
-	string(ActionDiagnostics),
-}
-
 type Request struct {
 	ProtocolVersion int    `json:"protocol_version"`
 	Action          Action `json:"action"`
@@ -44,7 +34,6 @@ type Request struct {
 type Response struct {
 	ProtocolVersion int          `json:"protocol_version"`
 	OK              bool         `json:"ok"`
-	Capabilities    []string     `json:"capabilities,omitempty"`
 	Snapshot        *Snapshot    `json:"snapshot,omitempty"`
 	Invite          *Invite      `json:"invite,omitempty"`
 	Diagnostics     string       `json:"diagnostics,omitempty"`
@@ -93,7 +82,6 @@ func success() Response {
 	return Response{
 		ProtocolVersion: ProtocolVersion,
 		OK:              true,
-		Capabilities:    append([]string(nil), Capabilities...),
 	}
 }
 

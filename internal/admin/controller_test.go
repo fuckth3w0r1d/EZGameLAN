@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +17,7 @@ import (
 )
 
 type fakeManager struct {
+	crlWarning string
 	cfg        config.Config
 	clients    []store.Client
 	invite     ezlan.InviteResult
@@ -26,6 +28,7 @@ type fakeManager struct {
 }
 
 func (f *fakeManager) Config() config.Config { return f.cfg }
+func (f *fakeManager) CRLWarning() string    { return f.crlWarning }
 
 func (f *fakeManager) List() ([]store.Client, error) {
 	return append([]store.Client(nil), f.clients...), nil
@@ -33,11 +36,8 @@ func (f *fakeManager) List() ([]store.Client, error) {
 
 func (f *fakeManager) Invite(
 	_ context.Context,
-	name, output string,
+	name string,
 ) (ezlan.InviteResult, error) {
-	if output != "" {
-		return ezlan.InviteResult{}, errors.New("unexpected output path")
-	}
 	f.inviteName = name
 	return f.invite, f.inviteErr
 }
@@ -182,5 +182,65 @@ func TestInviteDoesNotExposeInternalError(t *testing.T) {
 	}
 	if bytes.Contains(data, []byte("private filesystem detail")) {
 		t.Fatalf("response leaked internal error: %s", data)
+	}
+}
+func TestSnapshotIncludesCRLWarnings(t *testing.T) {
+	t.Parallel()
+	for _, warning := range []string{"CRL 文件缺失", "CRL 即将过期", "吊销记录尚未发布"} {
+		for _, sessionsFail := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/sessionsFail=%t", warning, sessionsFail), func(t *testing.T) {
+				manager := &fakeManager{cfg: config.Default("vpn.example.test"), crlWarning: warning}
+				host := &fakeHost{}
+				if sessionsFail {
+					host.sessionsErr = errors.New("management unavailable")
+				}
+				response := NewController(manager, host).Execute(context.Background(), Request{
+					ProtocolVersion: ProtocolVersion, Action: ActionSnapshot,
+				})
+				if !response.OK || response.Snapshot == nil || !strings.Contains(response.Snapshot.Warning, warning) {
+					t.Fatalf("missing CRL warning: %#v", response)
+				}
+				if sessionsFail && !strings.Contains(response.Snapshot.Warning, "在线状态暂时读取失败") {
+					t.Fatal("CRL warning replaced the session warning")
+				}
+			})
+		}
+	}
+}
+
+func TestServeStreamExecutesOnlyOneCompleteRequest(t *testing.T) {
+	t.Parallel()
+	const request = `{"protocol_version":1,"action":"revoke","name":"alice"}`
+	for _, scenario := range []struct {
+		name, input string
+		valid       bool
+	}{
+		{"one request", request + "\n", true},
+		{"second request", request + "\n" + request + "\n", false},
+		{"trailing data", request + "invalid", false},
+		{"oversized", request + strings.Repeat(" ", MaxRequestSize), false},
+		{"empty", "", false},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			manager := &fakeManager{cfg: config.Default("vpn.example.test")}
+			var output bytes.Buffer
+			err := ServeStream(context.Background(), strings.NewReader(scenario.input), &output, NewController(manager, &fakeHost{}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var response Response
+			if err := json.Unmarshal(output.Bytes(), &response); err != nil {
+				t.Fatalf("expected exactly one JSON response: %v", err)
+			}
+			if response.OK != scenario.valid {
+				t.Fatalf("response = %#v", response)
+			}
+			if scenario.valid && manager.revoked != "alice" {
+				t.Fatal("request was not executed")
+			}
+			if !scenario.valid && manager.revoked != "" {
+				t.Fatal("incomplete request was executed")
+			}
+		})
 	}
 }

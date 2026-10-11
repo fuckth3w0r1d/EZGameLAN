@@ -10,7 +10,7 @@ import (
 func TestRotatingFileBoundsRetentionAndSnapshot(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "service.log")
-	logFile, err := open(path, 1024, 2)
+	logFile, err := openWithSecurity(path, 1024, 2, false)
 	if err != nil {
 		t.Fatal(err)
 	}

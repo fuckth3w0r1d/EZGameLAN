@@ -1,5 +1,5 @@
 // Package ipc defines the bounded local protocol shared by the Windows client
-// and service.
+// and elevated backend.
 package ipc
 
 import (
@@ -58,7 +58,6 @@ type Credential struct {
 	ClientName string `json:"client_name,omitempty"`
 	Endpoint   string `json:"endpoint,omitempty"`
 	ServerName string `json:"server_name,omitempty"`
-	Legacy     bool   `json:"legacy,omitempty"`
 }
 
 type Status struct {
@@ -212,15 +211,7 @@ func (c Credential) Validate() error {
 	if !join.ValidCredentialID(c.ID) {
 		return errors.New("E_SERVICE_PROTOCOL: 凭证 ID 无效")
 	}
-	if c.Legacy {
-		if c.ID != join.LegacyCredentialID || c.ClientName != "" ||
-			c.Endpoint != "" || c.ServerName != "" {
-			return errors.New("E_SERVICE_PROTOCOL: 旧版凭证摘要无效")
-		}
-		return nil
-	}
-	if c.ID == join.LegacyCredentialID || !join.ValidCredentialID(c.ID) ||
-		!invite.ValidName(c.ClientName) ||
+	if !invite.ValidName(c.ClientName) ||
 		!invite.ValidNameWithLimit(c.ServerName, 64) ||
 		len(c.Endpoint) > 512 {
 		return errors.New("E_SERVICE_PROTOCOL: 凭证摘要字段无效")

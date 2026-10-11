@@ -18,6 +18,7 @@ import (
 	"github.com/r3t2/ezgamelan/internal/ipc"
 	"github.com/r3t2/ezgamelan/internal/join"
 	"github.com/r3t2/ezgamelan/internal/logging"
+	"github.com/r3t2/ezgamelan/internal/portable"
 	"golang.org/x/sys/windows"
 )
 
@@ -135,7 +136,8 @@ var (
 	procShellNotifyIcon = shell32.NewProc("Shell_NotifyIconW")
 	procGetSaveFileName = comdlg32.NewProc("GetSaveFileNameW")
 
-	ui clientUI
+	ui             clientUI
+	backendSession *portable.Session
 )
 
 type clientUI struct {
@@ -249,6 +251,7 @@ type openFileName struct {
 
 func main() {
 	if err := run(); err != nil {
+		procMessageBox.Call(0, uintptr(unsafe.Pointer(utf16(err.Error()))), uintptr(unsafe.Pointer(utf16("EZGameLAN 启动失败"))), 0x10)
 		_, _ = fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -259,6 +262,12 @@ func run() error {
 	// creates them. Keep creation and the entire message loop on that thread.
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
+	var err error
+	backendSession, err = portable.NewSession()
+	if err != nil {
+		return err
+	}
+	defer backendSession.Close()
 
 	initializeClientLogging()
 	if ui.logFile != nil {
@@ -403,10 +412,6 @@ func windowProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		}
 		return 0
 	case wmClose:
-		if ui.trayAdded {
-			procShowWindow.Call(hwnd, swHide)
-			return 0
-		}
 		procDestroyWindow.Call(hwnd)
 		return 0
 	case wmDestroy:
@@ -449,7 +454,7 @@ func createControls(hwnd uintptr) {
 		501, 174, 143, 34, hwnd, idExport, font,
 	)
 	ui.statusLabel = createControl(
-		"STATIC", "正在启动后台服务…", wsChild|wsVisible,
+		"STATIC", "正在读取本地凭证…", wsChild|wsVisible,
 		24, 224, 620, 88, hwnd, 0, font,
 	)
 
@@ -596,7 +601,7 @@ func (u *clientUI) start(request ipc.Request, status string) {
 		defer u.wg.Done()
 		ctx, cancel := context.WithTimeout(u.ctx, 40*time.Second)
 		defer cancel()
-		response, err := ipc.Call(ctx, request)
+		response, err := backendSession.Call(ctx, request)
 		u.mu.Lock()
 		u.response = response
 		u.err = err
@@ -619,7 +624,7 @@ func (u *clientUI) pollStatus() {
 		defer u.wg.Done()
 		ctx, cancel := context.WithTimeout(u.ctx, 5*time.Second)
 		defer cancel()
-		response, err := ipc.Call(ctx, ipc.Request{
+		response, err := backendSession.Call(ctx, ipc.Request{
 			Version: ipc.Version,
 			Action:  ipc.ActionStatus,
 		})
@@ -644,7 +649,7 @@ func (u *clientUI) finishStatusPoll() {
 	if err != nil {
 		u.logger.Warn("status refresh failed", "error", err)
 		u.statusShown = false
-		status := "后台服务未响应，请在 Windows“服务”中重启 EZGameLAN。"
+		status := "读取状态失败，请退出后重新打开 EZGameLAN。"
 		setText(u.statusLabel, status)
 		updateTrayIcon(u.hwnd, nimModify, status)
 		return
@@ -675,7 +680,7 @@ func (u *clientUI) finish() {
 	if err != nil {
 		u.logger.Error("UI operation failed", "action", action, "error", err)
 		u.statusShown = false
-		status := "后台服务未响应，请在 Windows“服务”中重启 EZGameLAN。"
+		status := err.Error()
 		setText(u.statusLabel, status)
 		updateTrayIcon(u.hwnd, nimModify, status)
 		u.setButtonsForStatus(u.lastStatus)
@@ -862,9 +867,6 @@ func credentialDisplay(credential ipc.Credential) string {
 }
 
 func credentialDisplayLimit(credential ipc.Credential, limit int) string {
-	if credential.Legacy {
-		return "旧版局域网配置"
-	}
 	text := credential.Endpoint + "  |  " + credential.ServerName +
 		"  |  " + credential.ClientName
 	characters := []rune(text)
@@ -958,13 +960,8 @@ func (u *clientUI) exportDiagnostics(response ipc.Response) {
 
 func initializeClientLogging() {
 	ui.logger = slog.New(slog.NewTextHandler(io.Discard, nil))
-	localAppData := os.Getenv("LOCALAPPDATA")
-	if !filepath.IsAbs(localAppData) {
-		ui.logInitErr = fmt.Errorf("LOCALAPPDATA 路径无效")
-		return
-	}
 	logFile, err := logging.OpenUser(
-		filepath.Join(localAppData, "EZGameLAN", "logs", "client.log"),
+		filepath.Join(backendSession.DataDirectory(), "logs", "client.log"),
 	)
 	if err != nil {
 		ui.logInitErr = err

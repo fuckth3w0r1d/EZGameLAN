@@ -4,12 +4,18 @@ package join
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"golang.org/x/sys/windows"
 )
 
-func securePath(ctx context.Context, path string, directory bool) error {
+func validateOwnerSID(ownerSID string) error {
+	_, err := windows.StringToSid(ownerSID)
+	return err
+}
+
+func ProtectPath(ctx context.Context, path string, directory bool, ownerSID string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -31,16 +37,50 @@ func securePath(ctx context.Context, path string, directory bool) error {
 		fullAccessEntry(systemSID, windows.TRUSTEE_IS_USER, inheritance),
 		fullAccessEntry(administratorsSID, windows.TRUSTEE_IS_GROUP, inheritance),
 	}
+	if ownerSID != "" {
+		owner, err := windows.StringToSid(ownerSID)
+		if err != nil {
+			return err
+		}
+		entries = append(entries, fullAccessEntry(owner, windows.TRUSTEE_IS_USER, inheritance))
+	}
 	acl, err := windows.ACLFromEntries(entries, nil)
 	if err != nil {
 		return fmt.Errorf("创建 Windows ACL: %w", err)
 	}
-	if err := windows.SetNamedSecurityInfo(
-		path,
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return err
+	}
+	flags := uint32(windows.FILE_FLAG_OPEN_REPARSE_POINT)
+	if directory {
+		flags |= windows.FILE_FLAG_BACKUP_SEMANTICS
+	}
+	access := uint32(windows.WRITE_DAC | windows.READ_CONTROL | windows.FILE_READ_ATTRIBUTES)
+	info := windows.SECURITY_INFORMATION(windows.DACL_SECURITY_INFORMATION | windows.PROTECTED_DACL_SECURITY_INFORMATION)
+	var fileOwner *windows.SID
+	if ownerSID == "" {
+		access |= windows.WRITE_OWNER
+		info |= windows.OWNER_SECURITY_INFORMATION
+		fileOwner = administratorsSID
+	}
+	handle, err := windows.CreateFile(name, access, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, nil, windows.OPEN_EXISTING, flags, 0)
+	if err != nil {
+		return err
+	}
+	defer windows.CloseHandle(handle)
+	var attributes windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(handle, &attributes); err != nil {
+		return err
+	}
+	if attributes.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+		return errors.New("credential path is a reparse point")
+	}
+	if err := windows.SetSecurityInfo(
+		handle,
 		windows.SE_FILE_OBJECT,
-		windows.DACL_SECURITY_INFORMATION|
-			windows.PROTECTED_DACL_SECURITY_INFORMATION,
-		nil,
+		info,
+		fileOwner,
 		nil,
 		acl,
 		nil,

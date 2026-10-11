@@ -4,7 +4,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
+
+	"github.com/r3t2/ezgamelan/internal/testutil"
 )
 
 func TestCreateAndReplace(t *testing.T) {
@@ -30,7 +33,7 @@ func TestCreateAndReplace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stat: %v", err)
 	}
-	if got := info.Mode().Perm(); got != 0o600 {
+	if got := info.Mode().Perm(); runtime.GOOS != "windows" && got != 0o600 {
 		t.Fatalf("mode = %#o, want 0600", got)
 	}
 }
@@ -43,9 +46,7 @@ func TestCreateRejectsSymlink(t *testing.T) {
 	if err := os.WriteFile(target, []byte("unchanged"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(target, link); err != nil {
-		t.Fatal(err)
-	}
+	testutil.Symlink(t, target, link)
 	if err := Create(link, []byte("replacement"), 0o600); !errors.Is(err, os.ErrExist) {
 		t.Fatalf("Create error = %v, want os.ErrExist", err)
 	}

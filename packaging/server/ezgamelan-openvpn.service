@@ -1,7 +1,8 @@
 [Unit]
 Description=EZGameLAN OpenVPN server
 Documentation=https://github.com/r3t2/ezgamelan
-After=network-online.target
+After=network-online.target ezgamelan-maintain.service
+Requires=ezgamelan-maintain.service
 Wants=network-online.target
 ConditionPathExists=/etc/ezgamelan/server.conf
 

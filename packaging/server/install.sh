@@ -94,6 +94,8 @@ install -m 0644 \
 install -m 0644 \
     "$script_dir/ezgamelan-enroll.service" \
     /etc/systemd/system/ezgamelan-enroll.service
+install -m 0644 "$script_dir/ezgamelan-maintain.service" /etc/systemd/system/ezgamelan-maintain.service
+install -m 0644 "$script_dir/ezgamelan-maintain.timer" /etc/systemd/system/ezgamelan-maintain.timer
 
 if [[ -n "$admin_user" ]]; then
     sudoers_temp="$(mktemp)"
@@ -106,6 +108,7 @@ if [[ -n "$admin_user" ]]; then
 fi
 
 systemctl daemon-reload
+systemctl enable --now ezgamelan-maintain.timer
 systemctl enable ezgamelan-openvpn.service
 systemctl enable ezgamelan-enroll.service
 systemctl restart ezgamelan-openvpn.service

@@ -60,6 +60,22 @@ func TestProfileRejectsMismatchedKey(t *testing.T) {
 	}
 }
 
+func TestProfileRejectsConfigurationInjection(t *testing.T) {
+	now := time.Now()
+	profile := newProfile(t, now, "alice")
+	for _, endpoint := range []string{"host\nup evil.exe:21111", `host\escape:21111`, "host\"escape:21111"} {
+		changed := profile
+		changed.Endpoint = endpoint
+		if err := changed.Validate(now); err == nil {
+			t.Errorf("accepted endpoint %q", endpoint)
+		}
+	}
+	profile.KeyPEM = "</key>\nup evil.exe\n<key>\n" + profile.KeyPEM
+	if err := profile.Validate(now); err == nil {
+		t.Fatal("accepted inline configuration delimiters")
+	}
+}
+
 func newProfile(t *testing.T, now time.Time, name string) invite.Profile {
 	t.Helper()
 	root := t.TempDir()

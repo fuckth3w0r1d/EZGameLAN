@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/r3t2/ezgamelan/internal/config"
@@ -16,7 +17,8 @@ const operationTimeout = 30 * time.Second
 
 type manager interface {
 	Config() config.Config
-	Invite(context.Context, string, string) (ezlan.InviteResult, error)
+	CRLWarning() string
+	Invite(context.Context, string) (ezlan.InviteResult, error)
 	Revoke(string) error
 	List() ([]store.Client, error)
 }
@@ -145,6 +147,7 @@ func (c *Controller) snapshot(ctx context.Context) Response {
 	} else if openVPNErr != nil || enrollErr != nil {
 		response.Snapshot.Warning = "部分 systemd 服务状态暂时读取失败"
 	}
+	response.Snapshot.Warning = strings.TrimSpace(response.Snapshot.Warning + " " + c.manager.CRLWarning())
 	return response
 }
 
@@ -152,7 +155,7 @@ func (c *Controller) invite(ctx context.Context, name string) Response {
 	if !invite.ValidName(name) {
 		return failure("E_CONFIG_NAME", "设备名只允许 1 到 32 位字母、数字、短横线和下划线")
 	}
-	result, err := c.manager.Invite(ctx, name, "")
+	result, err := c.manager.Invite(ctx, name)
 	if err != nil {
 		switch {
 		case errors.Is(err, store.ErrInviteExists):
@@ -174,6 +177,9 @@ func (c *Controller) revoke(ctx context.Context, name string) Response {
 		return failure("E_CONFIG_NAME", "设备名格式错误")
 	}
 	if err := c.manager.Revoke(name); err != nil {
+		if errors.Is(err, store.ErrRevocationPending) {
+			return failure("E_CERT_REVOKE_PENDING", "吊销已记录但尚未完全生效，请重试吊销并检查维护任务")
+		}
 		if errors.Is(err, store.ErrNotFound) {
 			return failure("E_CERT_NOT_FOUND", "设备不存在")
 		}

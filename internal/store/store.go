@@ -20,10 +20,11 @@ import (
 const MaxClients = 10
 
 var (
-	ErrNotFound     = errors.New("not found")
-	ErrInviteExists = errors.New("client already exists")
-	ErrClientLimit  = errors.New("client limit reached")
-	ErrInvalidToken = errors.New("token is invalid or expired")
+	ErrNotFound          = errors.New("not found")
+	ErrInviteExists      = errors.New("client already exists")
+	ErrClientLimit       = errors.New("client limit reached")
+	ErrInvalidToken      = errors.New("token is invalid or expired")
+	ErrRevocationPending = errors.New("revocation recorded but publication is pending")
 )
 
 type ClientStatus string
@@ -137,30 +138,6 @@ func (s *Store) AddPending(client Client, pending Pending, now time.Time) error 
 	})
 }
 
-func (s *Store) AddActive(client Client, now time.Time) error {
-	return s.withLock(func() error {
-		if err := s.cleanupExpiredUnlocked(now); err != nil {
-			return err
-		}
-		if err := validateNewClient(client); err != nil {
-			return err
-		}
-		replace, err := s.prepareClientNameUnlocked(client.Name)
-		if err != nil {
-			return err
-		}
-		count, err := s.countCurrentUnlocked()
-		if err != nil {
-			return err
-		}
-		if count >= MaxClients {
-			return ErrClientLimit
-		}
-		client.Status = StatusActive
-		return s.writeNewClientUnlocked(client, replace)
-	})
-}
-
 // Claim consumes a token before returning the profile. A failed transfer can
 // be recovered by revoking the client and issuing a new invite.
 func (s *Store) Claim(token string, now time.Time) (invite.Profile, error) {
@@ -197,6 +174,15 @@ func (s *Store) Claim(token string, now time.Time) (invite.Profile, error) {
 			if client.Status != StatusPending || !pending.ExpiresAt.After(now) {
 				return ErrInvalidToken
 			}
+			revocations, err := s.readRevocationsUnlocked()
+			if err != nil {
+				return err
+			}
+			for _, record := range revocations {
+				if record.SerialHex == client.SerialHex {
+					return ErrInvalidToken
+				}
+			}
 			client.Status = StatusActive
 			if err := writeJSONReplace(s.clientPath(client.Name), client, 0o600); err != nil {
 				return err
@@ -228,8 +214,7 @@ func (s *Store) List(now time.Time) ([]Client, error) {
 	return result, err
 }
 
-// Revoke builds external revocation state before committing the local client
-// status, so an interrupted command fails closed.
+// Revoke persists the revocation before publishing it to OpenVPN.
 func (s *Store) Revoke(
 	name string,
 	now time.Time,
@@ -246,12 +231,6 @@ func (s *Store) Revoke(
 		if err != nil {
 			return err
 		}
-		if client.Status == StatusRevoked {
-			return nil
-		}
-		client.Status = StatusRevoked
-		client.RevokedAt = &now
-
 		revocations, err := s.readRevocationsUnlocked()
 		if err != nil {
 			return err
@@ -270,20 +249,88 @@ func (s *Store) Revoke(
 				RevokedAt: now,
 			})
 		}
-		if err := writeRevocations(revocations); err != nil {
-			return err
-		}
 		if err := writeJSONReplace(s.revocationsPath, revocations, 0o600); err != nil {
 			return err
 		}
-		if err := writeJSONReplace(s.clientPath(name), client, 0o600); err != nil {
+		if err := writeRevocations(revocations); err != nil {
+			return errors.Join(ErrRevocationPending, err)
+		}
+		return s.applyRevocationsUnlocked(revocations)
+	})
+}
+
+func (s *Store) Revocations() ([]Revocation, error) {
+	var records []Revocation
+	err := s.withLock(func() error {
+		var err error
+		records, err = s.readRevocationsUnlocked()
+		return err
+	})
+	return records, err
+}
+
+// ReconcileRevocations merges verified external records and publishes the ledger
+// under the same lock used by invitations and revocations.
+func (s *Store) ReconcileRevocations(readExternal func() ([]Revocation, error), publish func([]Revocation) error) error {
+	return s.withLock(func() error {
+		records, err := s.readRevocationsUnlocked()
+		if err != nil {
 			return err
 		}
-		if err := os.Remove(s.pendingPath(name)); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("remove pending invite: %w", err)
+		external, err := readExternal()
+		if err != nil {
+			return err
 		}
-		return syncDirectory(s.pendingDir)
+		seen := make(map[string]bool, len(records))
+		for _, record := range records {
+			seen[record.SerialHex] = true
+		}
+		changed := false
+		for _, record := range external {
+			if !seen[record.SerialHex] {
+				records = append(records, record)
+				seen[record.SerialHex] = true
+				changed = true
+			}
+		}
+		if changed {
+			if err := writeJSONReplace(s.revocationsPath, records, 0o600); err != nil {
+				return err
+			}
+		}
+		if err := publish(records); err != nil {
+			return err
+		}
+		return s.applyRevocationsUnlocked(records)
 	})
+}
+
+func (s *Store) applyRevocationsUnlocked(records []Revocation) error {
+	clients, err := s.listUnlocked()
+	if err != nil {
+		return err
+	}
+	bySerial := make(map[string]time.Time, len(records))
+	for _, record := range records {
+		bySerial[record.SerialHex] = record.RevokedAt
+	}
+	for _, client := range clients {
+		at, revoked := bySerial[client.SerialHex]
+		if !revoked {
+			continue
+		}
+		if client.Status != StatusRevoked || client.RevokedAt == nil {
+			client.Status = StatusRevoked
+			client.RevokedAt = &at
+			if err := writeJSONReplace(s.clientPath(client.Name), client, 0o600); err != nil {
+				return err
+			}
+		}
+		if err := os.Remove(s.pendingPath(client.Name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return syncDirectory(s.pendingDir)
 }
 
 func (s *Store) cleanupExpiredUnlocked(now time.Time) error {

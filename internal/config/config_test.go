@@ -14,7 +14,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	cfg := Default("vpn.example.test")
 	cfg.StateDir = filepath.Join(dir, "state")
 	cfg.PKIDir = filepath.Join(dir, "pki")
-	cfg.OpenVPNPath = "/test/openvpn"
+	cfg.OpenVPNPath = filepath.Join(dir, "openvpn")
 	path := filepath.Join(dir, "config.json")
 
 	if err := Save(path, cfg); err != nil {
@@ -35,7 +35,7 @@ func TestLoadRejectsUnknownField(t *testing.T) {
 	cfg := Default("127.0.0.1")
 	cfg.StateDir = filepath.Join(dir, "state")
 	cfg.PKIDir = filepath.Join(dir, "pki")
-	cfg.OpenVPNPath = "/test/openvpn"
+	cfg.OpenVPNPath = filepath.Join(dir, "openvpn")
 	path := filepath.Join(dir, "config.json")
 	if err := Save(path, cfg); err != nil {
 		t.Fatal(err)

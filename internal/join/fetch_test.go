@@ -5,8 +5,6 @@ import (
 	"context"
 	"io"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -75,27 +73,6 @@ func TestFetchDoesNotForwardTokenOnRedirect(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), token) {
 		t.Fatal("error exposed the invitation token")
-	}
-}
-
-func TestLoadFile(t *testing.T) {
-	t.Parallel()
-	now := time.Now()
-	profile := testProfile(t, now, "offline")
-	data, err := invite.Marshal(profile, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(t.TempDir(), "offline.ezlan")
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	got, err := LoadFile(path)
-	if err != nil {
-		t.Fatalf("LoadFile: %v", err)
-	}
-	if got.ClientName != "offline" {
-		t.Fatalf("client = %q", got.ClientName)
 	}
 }
 

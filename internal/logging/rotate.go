@@ -42,8 +42,7 @@ func Open(path string) (*RotatingFile, error) {
 	return open(path, DefaultMaxFileSize, DefaultBackups)
 }
 
-// OpenUser creates a smaller log under the current user's profile. It relies on
-// that profile's inherited ACL instead of replacing it with a service-only ACL.
+// OpenUser creates a smaller log in a user directory and preserves inherited ACLs.
 func OpenUser(path string) (*RotatingFile, error) {
 	return openWithSecurity(path, UserMaxFileSize, UserBackups, false)
 }

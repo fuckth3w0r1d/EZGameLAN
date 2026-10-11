@@ -1,7 +1,6 @@
 package admin
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -10,11 +9,7 @@ import (
 	"io"
 )
 
-const maxRequestsPerStream = 128
-
-// ServeStream processes bounded NDJSON requests. SSH callers currently send
-// one request per process; accepting several frames keeps the protocol usable
-// for a future persistent SSH session without adding a daemon.
+// ServeStream reads one bounded JSON request and writes one response.
 func ServeStream(
 	ctx context.Context,
 	input io.Reader,
@@ -24,27 +19,18 @@ func ServeStream(
 	if controller == nil {
 		return errors.New("admin controller is nil")
 	}
-	scanner := bufio.NewScanner(io.LimitReader(input, int64(MaxRequestSize*maxRequestsPerStream)))
-	scanner.Buffer(make([]byte, 1024), MaxRequestSize)
-	for count := 0; scanner.Scan(); count++ {
-		if count >= maxRequestsPerStream {
-			return errors.New("too many management requests")
-		}
-		request, err := decodeRequest(scanner.Bytes())
-		response := Response{}
-		if err != nil {
-			response = failure("E_CONFIG_REQUEST", "管理请求格式错误")
-		} else {
-			response = controller.Execute(ctx, request)
-		}
-		if err := encodeResponse(output, response); err != nil {
-			return err
-		}
-	}
-	if err := scanner.Err(); err != nil {
+	data, err := io.ReadAll(io.LimitReader(input, MaxRequestSize+1))
+	if err != nil {
 		return fmt.Errorf("read management request: %w", err)
 	}
-	return nil
+	if len(data) > MaxRequestSize {
+		return encodeResponse(output, failure("E_CONFIG_REQUEST", "管理请求超过大小限制"))
+	}
+	request, err := decodeRequest(data)
+	if err != nil {
+		return encodeResponse(output, failure("E_CONFIG_REQUEST", "管理请求格式错误"))
+	}
+	return encodeResponse(output, controller.Execute(ctx, request))
 }
 
 func decodeRequest(data []byte) (Request, error) {
