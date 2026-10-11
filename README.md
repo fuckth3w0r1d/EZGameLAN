@@ -21,14 +21,14 @@
 
 服务端需要 Linux x64、systemd、Nginx 和 OpenVPN 2.6，OpenVPN 程序位于 `/usr/sbin/openvpn`。将 `packaging/server/` 和 `dist/ezlanctl-linux-amd64` 上传到服务器，保留这两个目录的相对位置。
 
-将 `ezgamelan.r3t2.top` 解析到服务器公网 IP，并为该域名配置有效的 Nginx HTTPS 证书。防火墙和云安全组允许 `21111/UDP`、`443/TCP` 及 SSH 管理端口；加入服务的 `21112/TCP` 仅在服务器回环地址监听。
+以下使用 `vpn.example.com` 作为示例域名，部署时请替换为自己的域名。将该域名解析到服务器公网 IP，并为其配置有效的 Nginx HTTPS 证书。防火墙和云安全组允许 `21111/UDP`、`443/TCP` 及 SSH 管理端口；加入服务的 `21112/TCP` 仅在服务器回环地址监听。
 
 在包含 `packaging/` 和 `dist/` 的目录执行以下命令。将 `SSH_USER` 替换为管理端使用的现有 Linux 登录用户：
 
 ~~~bash
 sudo bash packaging/server/install.sh \
-  --host ezgamelan.r3t2.top \
-  --enroll-url https://ezgamelan.r3t2.top/ezgamelan/v1/enroll \
+  --host vpn.example.com \
+  --enroll-url https://vpn.example.com/ezgamelan/v1/enroll \
   --admin-user SSH_USER \
   --binary ./dist/ezlanctl-linux-amd64
 ~~~
@@ -55,7 +55,7 @@ systemctl is-active \
 sudo ezlanctl maintain
 ~~~
 
-需要修改公网域名时，更新配置并重启加入服务：
+需要修改公网域名时，将 `NEW_HOST` 替换为新域名，更新配置并重启加入服务，同时更新域名解析和 Nginx HTTPS 配置：
 
 ~~~bash
 sudo ezlanctl config-update \
@@ -68,18 +68,18 @@ sudo systemctl restart ezgamelan-enroll.service
 
 ## 管理端使用
 
-在管理员的 Windows 电脑上启用 OpenSSH Client，并配置 `%USERPROFILE%\.ssh\config`。以下示例使用 SSH 别名 `s0`，将 `SSH_USER` 替换为部署时指定的用户，并填写对应私钥路径：
+在管理员的 Windows 电脑上启用 OpenSSH Client，并配置 `%USERPROFILE%\.ssh\config`。以下示例使用 SSH 别名 `ezgamelan`，将 `HostName` 替换为服务器域名或 IP，将 `SSH_USER` 替换为部署时指定的用户，并填写对应私钥路径：
 
 ~~~sshconfig
-Host s0
-    HostName ezgamelan.r3t2.top
+Host ezgamelan
+    HostName vpn.example.com
     User SSH_USER
     IdentityFile ~/.ssh/id_ed25519
 ~~~
 
-在终端执行 `ssh s0`，确认服务器指纹及密钥登录正常。管理端通过密钥登录，服务器部署时的 `--admin-user` 会授予该用户所需的管理命令权限。
+在终端执行 `ssh ezgamelan`，确认服务器指纹及密钥登录正常。管理端通过密钥登录，服务器部署时的 `--admin-user` 会授予该用户所需的管理命令权限。
 
-双击 `EZGameLAN-Admin.exe`，输入 `s0` 并点击“连接”。连接成功后，浏览器会自动打开管理界面。
+双击 `EZGameLAN-Admin.exe`，输入配置的 SSH 别名（示例为 `ezgamelan`）并点击“连接”。连接成功后，浏览器会自动打开管理界面。
 
 管理界面可查看设备和服务状态、在线设备的虚拟 IP 与流量，生成并复制一次性邀请，断开连接、吊销凭证、重启服务，以及查看和导出诊断信息。生成的邀请应单独发送给对应玩家。
 
